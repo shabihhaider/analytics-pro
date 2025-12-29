@@ -64,7 +64,7 @@ export default function DashboardPage() {
 
         <Button
           variant="outline"
-          className="bg-white/5 border-white/10 hover:bg-white/10 text-white backdrop-blur-md transition-all hover:scale-105 active:scale-95"
+          className="bg-white/5 border-white/10 hover:bg-white/10 text-white hover:text-white backdrop-blur-md transition-all hover:scale-105 active:scale-95"
           onClick={async () => {
             const toastId = toast.loading("Syncing latest data...");
             try {
@@ -114,7 +114,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-12 duration-700 delay-200">
         <Card className="col-span-2 bg-black/40 border-white/10 backdrop-blur-xl shadow-2xl">
           <CardHeader>
-            <CardTitle className="text-xl font-bold flex items-center gap-2">
+            <CardTitle className="text-xl font-bold flex items-center gap-2 text-white">
               <AlertTriangle className="h-5 w-5 text-yellow-500" />
               Churn Risk Radar
             </CardTitle>
@@ -137,8 +137,8 @@ export default function DashboardPage() {
                       <TableCell className="font-medium text-gray-200">{member.username}</TableCell>
                       <TableCell>
                         <span className={`px-2 py-1 rounded-full text-xs font-semibold ${member.riskLevel === 'high'
-                            ? 'bg-red-500/20 text-red-400 border border-red-500/20'
-                            : 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/20'
+                          ? 'bg-red-500/20 text-red-400 border border-red-500/20'
+                          : 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/20'
                           }`}>
                           {member.riskLevel.toUpperCase()}
                         </span>
