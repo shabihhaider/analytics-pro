@@ -1,65 +1,202 @@
-import Image from "next/image";
 
-export default function Home() {
+'use client';
+
+import { useEffect, useState } from 'react';
+import { Activity, Users, MessageSquare, TrendingUp, RefreshCw, DollarSign, AlertTriangle } from 'lucide-react';
+import { MetricCard } from '@/components/dashboard/metric-card';
+import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+
+interface EngagementData {
+  stats: {
+    averageScore: string;
+    activeUsers: number;
+    totalMessages: number;
+  };
+  leaderboard: Array<{
+    userId: string;
+    username: string;
+    score: string;
+    messages: number;
+  }>;
+}
+
+export default function DashboardPage() {
+  const [metrics, setMetrics] = useState<any>(null);
+  const [revenue, setRevenue] = useState<any>(null);
+  const [risk, setRisk] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchData() {
+      try {
+        const [engRes, revRes, riskRes] = await Promise.all([
+          fetch('/api/analytics/engagement'),
+          fetch('/api/analytics/revenue'),
+          fetch('/api/analytics/risk')
+        ]);
+
+        if (engRes.ok) setMetrics(await engRes.json());
+        if (revRes.ok) setRevenue(await revRes.json());
+        if (riskRes.ok) setRisk(await riskRes.json());
+
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchData();
+  }, []);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <div className="p-8 space-y-8 min-h-screen bg-[#0a0a0a] text-white font-sans selection:bg-purple-500/30">
+      {/* Header */}
+      <div className="flex justify-between items-center animate-in fade-in slide-in-from-top-4 duration-700">
+        <div>
+          <h1 className="text-4xl font-extrabold tracking-tight bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent">
+            Analytics Pro
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+          <p className="text-gray-400 mt-2 text-lg">Real-time engagement & revenue insights</p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+
+        <Button
+          variant="outline"
+          className="bg-white/5 border-white/10 hover:bg-white/10 text-white backdrop-blur-md transition-all hover:scale-105 active:scale-95"
+          onClick={async () => {
+            const toastId = toast.loading("Syncing latest data...");
+            try {
+              await fetch('/api/sync', { method: 'POST' });
+              toast.success("Sync complete!", { id: toastId });
+              window.location.reload();
+            } catch (e) {
+              toast.error("Sync failed", { id: toastId });
+            }
+          }}
+        >
+          <RefreshCw className="mr-2 h-4 w-4" />
+          Sync Data
+        </Button>
+      </div>
+
+      {/* Metrics Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100">
+        <MetricCard
+          title="Engagement Score"
+          value={metrics?.stats?.averageScore ? `${metrics.stats.averageScore}%` : '0%'}
+          icon={<Activity className="h-5 w-5 text-purple-400" />}
+          trend="+2.5%"
+        />
+        <MetricCard
+          title="Active Members"
+          value={revenue?.activeMembers?.toString() || '0'}
+          icon={<Users className="h-5 w-5 text-blue-400" />}
+          trend="+12"
+        />
+        <MetricCard
+          title="Monthly Revenue (MRR)"
+          value={`$${(revenue?.mrr?.usd || 0).toLocaleString()}`}
+          icon={<DollarSign className="h-5 w-5 text-green-400" />}
+          trend="+8.2%"
+        />
+        <MetricCard
+          title="High Risk Members"
+          value={risk?.riskList?.filter((r: any) => r.riskLevel === 'high').length.toString() || '0'}
+          icon={<AlertTriangle className="h-5 w-5 text-red-400" />}
+          trend="Action Needed"
+          trendUp={false}
+        />
+      </div>
+
+      {/* Risk Table Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-12 duration-700 delay-200">
+        <Card className="col-span-2 bg-black/40 border-white/10 backdrop-blur-xl shadow-2xl">
+          <CardHeader>
+            <CardTitle className="text-xl font-bold flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-yellow-500" />
+              Churn Risk Radar
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-md border border-white/5 overflow-hidden">
+              <Table>
+                <TableHeader className="bg-white/5">
+                  <TableRow className="border-white/5 hover:bg-white/5">
+                    <TableHead className="text-gray-400">Member</TableHead>
+                    <TableHead className="text-gray-400">Risk Level</TableHead>
+                    <TableHead className="text-gray-400">Days Inactive</TableHead>
+                    <TableHead className="text-gray-400">Value (MRR)</TableHead>
+                    <TableHead className="text-right text-gray-400">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {risk?.riskList?.slice(0, 5).map((member: any, i: number) => (
+                    <TableRow key={i} className="border-white/5 hover:bg-white/[0.02] transition-colors">
+                      <TableCell className="font-medium text-gray-200">{member.username}</TableCell>
+                      <TableCell>
+                        <span className={`px-2 py-1 rounded-full text-xs font-semibold ${member.riskLevel === 'high'
+                            ? 'bg-red-500/20 text-red-400 border border-red-500/20'
+                            : 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/20'
+                          }`}>
+                          {member.riskLevel.toUpperCase()}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-gray-400">{member.daysInactive} days</TableCell>
+                      <TableCell className="text-green-400 font-mono">
+                        ${member.renewalPrice} <span className="text-xs text-gray-500">{member.currency}</span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button size="sm" variant="ghost" className="h-8 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10">
+                          Contact
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {(!risk?.riskList || risk.riskList.length === 0) && (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center py-8 text-gray-500">
+                        No high-risk members detected based on current activity.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Top Engaged Sidebar */}
+        <Card className="bg-black/40 border-white/10 backdrop-blur-xl shadow-2xl">
+          <CardHeader>
+            <CardTitle>Top Engaged</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {metrics?.leaderboard?.map((member: any, i: number) => (
+                <div key={i} className="flex items-center justify-between border-b border-white/5 pb-2 last:border-0 last:pb-0">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/20 text-xs font-bold text-blue-500">
+                      {i + 1}
+                    </div>
+                    <div>
+                      <p className="font-medium text-sm">{member.username || 'Unknown'}</p>
+                      <p className="text-xs text-muted-foreground">{member.messages} msgs</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="block font-bold text-green-400 text-sm">{Number(member.score).toFixed(0)}</span>
+                  </div>
+                </div>
+              ))}
+              {(!metrics?.leaderboard || metrics.leaderboard.length === 0) && (
+                <p className="text-sm text-gray-500 text-center py-4">No data yet</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
