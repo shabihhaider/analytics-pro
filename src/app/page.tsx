@@ -148,7 +148,12 @@ export default function DashboardPage() {
                         ${member.renewalPrice} <span className="text-xs text-gray-500">{member.currency}</span>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button size="sm" variant="ghost" className="h-8 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10"
+                          onClick={() => window.location.href = `mailto:${member.email}?subject=Risk Alert: Staying Active in the Community`}
+                        >
                           Contact
                         </Button>
                       </TableCell>
@@ -170,7 +175,7 @@ export default function DashboardPage() {
         {/* Top Engaged Sidebar */}
         <Card className="bg-black/40 border-white/10 backdrop-blur-xl shadow-2xl">
           <CardHeader>
-            <CardTitle>Top Engaged</CardTitle>
+            <CardTitle className="text-white">Top Engaged</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
@@ -181,7 +186,7 @@ export default function DashboardPage() {
                       {i + 1}
                     </div>
                     <div>
-                      <p className="font-medium text-sm">{member.username || 'Unknown'}</p>
+                      <p className="font-medium text-sm text-gray-200">{member.username || 'Unknown'}</p>
                       <p className="text-xs text-muted-foreground">{member.messages} msgs</p>
                     </div>
                   </div>
