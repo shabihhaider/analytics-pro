@@ -106,6 +106,12 @@ export default function DashboardPage() {
         </Button>
       </div>
 
+      {/* Debug Info - Remove before final ship */}
+      <div className="text-xs text-center text-gray-500 font-mono py-2">
+        Auth Debug: Token {(window as any).WHOP_TOKEN ? 'Present' : 'Missing'}
+        ({(window as any).WHOP_TOKEN?.substring(0, 10)}...)
+      </div>
+
       {/* AI Insight */}
       <div className="animate-in fade-in slide-in-from-top-8 duration-700 delay-100">
         <InsightCard insight={insight} loading={loading} />
@@ -242,6 +248,6 @@ export default function DashboardPage() {
         </CardContent>
       </Card>
 
-    </div>
+    </div >
   );
 }
