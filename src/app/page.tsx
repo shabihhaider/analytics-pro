@@ -34,8 +34,16 @@ export default function DashboardPage() {
   const [history, setHistory] = useState<any>([]);
   const [insight, setInsight] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [mounted, setMounted] = useState(false); // Track client-side mounting
+
+  // Set mounted flag after hydration
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
+    if (!mounted) return; // Don't fetch until after hydration
+
     async function fetchData() {
       // Robust Auth: Get token from global window object injected by layout
       // This bypasses cookie blocking in iframes
@@ -84,7 +92,7 @@ export default function DashboardPage() {
       }
     }
     fetchData();
-  }, []);
+  }, [mounted]);
 
   return (
     <div className="p-8 space-y-8 min-h-screen bg-[#0a0a0a] text-white font-sans selection:bg-purple-500/30">
@@ -103,7 +111,7 @@ export default function DashboardPage() {
           onClick={async () => {
             const toastId = toast.loading("Syncing latest data...");
             try {
-              const token = (window as any).WHOP_TOKEN;
+              const token = mounted ? (window as any).WHOP_TOKEN : '';
               const headers = new Headers();
               if (token) {
                 headers.set('x-whop-user-token', token);
@@ -123,10 +131,11 @@ export default function DashboardPage() {
       </div>
 
       {/* Debug Info - Remove before final ship */}
-      <div className="text-xs text-center text-gray-500 font-mono py-2">
-        Auth Debug: Token {(window as any).WHOP_TOKEN ? 'Present' : 'Missing'}
-        ({(window as any).WHOP_TOKEN?.substring(0, 10)}...)
-      </div>
+      {mounted && process.env.NODE_ENV === 'development' && (
+        <div className="text-xs text-center text-gray-500 font-mono py-2">
+          Auth Debug: Token {(window as any).WHOP_TOKEN ? 'Present' : 'Missing'}
+        </div>
+      )}
 
       {/* AI Insight */}
       <div className="animate-in fade-in slide-in-from-top-8 duration-700 delay-100">

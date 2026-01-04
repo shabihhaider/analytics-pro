@@ -18,8 +18,16 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
         let token: string | null = null;
 
         if (request) {
-            // Whop sends the token in this header when the app is opened in iframe
+            // Priority 1: x-whop-user-token header (set by middleware)
             token = request.headers.get('x-whop-user-token');
+
+            // Priority 2: Authorization Bearer header (set by client fetch)
+            if (!token) {
+                const authHeader = request.headers.get('authorization');
+                if (authHeader?.startsWith('Bearer ')) {
+                    token = authHeader.substring(7);
+                }
+            }
         }
 
         // Development mode fallback

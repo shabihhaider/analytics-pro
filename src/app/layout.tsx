@@ -18,16 +18,21 @@ export default function RootLayout({
 }>) {
   const headersList = headers();
   const token = headersList.get('x-whop-user-token');
+
+  // Always render script tag with empty string if no token to avoid hydration mismatch
+  const tokenValue = token || '';
+
   return (
     <html lang="en">
+      <head>
+        {/* Move script to head and always render for consistent SSR/hydration */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `window.WHOP_TOKEN = ${JSON.stringify(tokenValue)};`,
+          }}
+        />
+      </head>
       <body className={inter.className}>
-        {token && (
-          <script
-            dangerouslySetInnerHTML={{
-              __html: `window.WHOP_TOKEN = "${token}";`,
-            }}
-          />
-        )}
         {children}
       </body>
     </html>
