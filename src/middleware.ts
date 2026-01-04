@@ -14,28 +14,26 @@ export async function middleware(request: NextRequest) {
     }
 
     // 2. Extract Token
-    // iframe passes token in x-whop-user-token header
+    // Priority: Header (Initial Load) > Cookie (Subsequent API calls)
     let token = request.headers.get('x-whop-user-token');
+    let hasCookie = false;
 
-    // Dev Proxy / Local fallback: check cookie if header is missing
-    if (!token && process.env.NODE_ENV === 'development') {
-        const cookieToken = request.cookies.get('whop_user_token');
-        console.log('[Middleware Debug] Cookies:', request.cookies.getAll().map(c => c.name));
-        console.log('[Middleware Debug] Headers:', Array.from(request.headers.keys()));
-        if (cookieToken) {
-            token = cookieToken.value;
-            console.log('[Middleware Debug] Found token in cookie');
-        } else {
-            console.log('[Middleware Debug] No token in cookie');
+    if (!token) {
+        const cookie = request.cookies.get('whop_user_token');
+        if (cookie) {
+            token = cookie.value;
+            hasCookie = true;
         }
+    }
+
+    // Dev Proxy / Local fallback
+    if (!token && process.env.NODE_ENV === 'development') {
+        console.log('[Middleware Debug] Allowing request without token in Dev Mode');
+        return NextResponse.next();
     }
 
     // 3. Validate Token
     if (!token) {
-        if (process.env.NODE_ENV === 'development') {
-            console.log('[Middleware Debug] Allowing request without token in Dev Mode');
-            return NextResponse.next();
-        }
         if (request.nextUrl.pathname.startsWith('/api')) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
@@ -43,19 +41,32 @@ export async function middleware(request: NextRequest) {
     }
 
     try {
-        // Validate using the SDK
+        // Only verify if we haven't already verified (optimization: you might skip verify on every API call if valid cookie)
+        // For now, verification on every request is safer.
         const whop = new Whop({ apiKey: process.env.WHOP_API_KEY });
         await whop.verifyUserToken(token);
 
-        // Pass the token to the request headers for downstream use if needed
+        // Pass the token to the request headers for downstream use
         const requestHeaders = new Headers(request.headers);
         requestHeaders.set('x-whop-user-token', token);
 
-        return NextResponse.next({
+        const response = NextResponse.next({
             request: {
                 headers: requestHeaders,
             },
         });
+
+        // SET COOKIE if it came from header (fresh session) or we just want to refresh it
+        response.cookies.set('whop_user_token', token, {
+            httpOnly: true,
+            secure: true, // Always secure in production (Vercel is HTTPS)
+            sameSite: 'none', // Critical for iframe support
+            path: '/',
+            maxAge: 60 * 60 * 24 // 1 day
+        });
+
+        return response;
+
     } catch (error) {
         console.error('Token validation failed:', error);
         if (request.nextUrl.pathname.startsWith('/api')) {
