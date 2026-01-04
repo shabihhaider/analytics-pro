@@ -14,8 +14,17 @@ export async function middleware(request: NextRequest) {
     }
 
     // 2. Extract Token
-    // Priority: Header (Initial Load) > Cookie (Subsequent API calls)
+    // Priority: Header (Initial Load) > Authorization Header > Cookie
     let token = request.headers.get('x-whop-user-token');
+
+    // Check Authorization: Bearer <token>
+    if (!token) {
+        const authHeader = request.headers.get('authorization');
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            token = authHeader.substring(7);
+        }
+    }
+
     let hasCookie = false;
 
     if (!token) {

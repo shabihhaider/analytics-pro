@@ -41,7 +41,10 @@ export default function DashboardPage() {
       // This bypasses cookie blocking in iframes
       const token = (window as any).WHOP_TOKEN;
       const headers = new Headers();
-      if (token) headers.set('x-whop-user-token', token);
+      if (token) {
+        headers.set('x-whop-user-token', token);
+        headers.set('Authorization', `Bearer ${token}`);
+      }
 
       try {
         const responses = await Promise.all([
@@ -102,7 +105,10 @@ export default function DashboardPage() {
             try {
               const token = (window as any).WHOP_TOKEN;
               const headers = new Headers();
-              if (token) headers.set('x-whop-user-token', token);
+              if (token) {
+                headers.set('x-whop-user-token', token);
+                headers.set('Authorization', `Bearer ${token}`);
+              }
               await fetch('/api/sync', { method: 'POST', headers });
               toast.success("Sync complete!", { id: toastId });
               window.location.reload();
