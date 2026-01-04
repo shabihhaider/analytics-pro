@@ -8,6 +8,10 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { RevenueChart } from "@/components/dashboard/revenue-chart";
+import { InsightCard } from "@/components/dashboard/insight-card";
+import { CoachChat } from "@/components/dashboard/coach-chat";
 
 interface EngagementData {
   stats: {
@@ -27,20 +31,32 @@ export default function DashboardPage() {
   const [metrics, setMetrics] = useState<any>(null);
   const [revenue, setRevenue] = useState<any>(null);
   const [risk, setRisk] = useState<any>(null);
+  const [history, setHistory] = useState<any>([]);
+  const [insight, setInsight] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function fetchData() {
       try {
-        const [engRes, revRes, riskRes] = await Promise.all([
+        const [engRes, revRes, riskRes, histRes, insightRes] = await Promise.all([
           fetch('/api/analytics/engagement'),
           fetch('/api/analytics/revenue'),
-          fetch('/api/analytics/risk')
+          fetch('/api/analytics/risk'),
+          fetch('/api/analytics/history'),
+          fetch('/api/analytics/insight')
         ]);
 
         if (engRes.ok) setMetrics(await engRes.json());
         if (revRes.ok) setRevenue(await revRes.json());
         if (riskRes.ok) setRisk(await riskRes.json());
+        if (histRes.ok) {
+          const hData = await histRes.json();
+          setHistory(hData.history || []);
+        }
+        if (insightRes.ok) {
+          const iData = await insightRes.json();
+          setInsight(iData.insight || "");
+        }
 
       } catch (e) {
         console.error(e);
@@ -81,6 +97,17 @@ export default function DashboardPage() {
         </Button>
       </div>
 
+      {/* AI Insight */}
+      <div className="animate-in fade-in slide-in-from-top-8 duration-700 delay-100">
+        <InsightCard insight={insight} loading={loading} />
+      </div>
+
+      <CoachChat contextStats={{
+        mrr: revenue?.mrr?.usd || 0,
+        activeMembers: revenue?.activeMembers || 0,
+        highRiskCount: risk?.riskList?.filter((r: any) => r.riskLevel === 'high').length || 0
+      }} />
+
       {/* Metrics Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100">
         <MetricCard
@@ -112,65 +139,8 @@ export default function DashboardPage() {
 
       {/* Risk Table Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-12 duration-700 delay-200">
-        <Card className="col-span-2 bg-black/40 border-white/10 backdrop-blur-xl shadow-2xl">
-          <CardHeader>
-            <CardTitle className="text-xl font-bold flex items-center gap-2 text-white">
-              <AlertTriangle className="h-5 w-5 text-yellow-500" />
-              Churn Risk Radar
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="rounded-md border border-white/5 overflow-hidden">
-              <Table>
-                <TableHeader className="bg-white/5">
-                  <TableRow className="border-white/5 hover:bg-white/5">
-                    <TableHead className="text-gray-400">Member</TableHead>
-                    <TableHead className="text-gray-400">Risk Level</TableHead>
-                    <TableHead className="text-gray-400">Days Inactive</TableHead>
-                    <TableHead className="text-gray-400">Value (MRR)</TableHead>
-                    <TableHead className="text-right text-gray-400">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {risk?.riskList?.slice(0, 5).map((member: any, i: number) => (
-                    <TableRow key={i} className="border-white/5 hover:bg-white/[0.02] transition-colors">
-                      <TableCell className="font-medium text-gray-200">{member.username}</TableCell>
-                      <TableCell>
-                        <span className={`px-2 py-1 rounded-full text-xs font-semibold ${member.riskLevel === 'high'
-                          ? 'bg-red-500/20 text-red-400 border border-red-500/20'
-                          : 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/20'
-                          }`}>
-                          {member.riskLevel.toUpperCase()}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-gray-400">{member.daysInactive} days</TableCell>
-                      <TableCell className="text-green-400 font-mono">
-                        ${member.renewalPrice} <span className="text-xs text-gray-500">{member.currency}</span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-8 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10"
-                          onClick={() => window.location.href = `mailto:${member.email}?subject=Risk Alert: Staying Active in the Community`}
-                        >
-                          Contact
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {(!risk?.riskList || risk.riskList.length === 0) && (
-                    <TableRow>
-                      <TableCell colSpan={5} className="text-center py-8 text-gray-500">
-                        No high-risk members detected based on current activity.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
+        {/* Revenue Chart (Takes up 2 columns) */}
+        <RevenueChart data={history} />
 
         {/* Top Engaged Sidebar */}
         <Card className="bg-black/40 border-white/10 backdrop-blur-xl shadow-2xl">
@@ -202,6 +172,67 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Churn Risk Radar (Moved Below) */}
+      <Card className="bg-black/40 border-white/10 backdrop-blur-xl shadow-2xl animate-in fade-in slide-in-from-bottom-16 duration-700 delay-300">
+        <CardHeader>
+          <CardTitle className="text-xl font-bold flex items-center gap-2 text-white">
+            <AlertTriangle className="h-5 w-5 text-yellow-500" />
+            Churn Risk Radar
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-md border border-white/5 overflow-hidden">
+            <Table>
+              <TableHeader className="bg-white/5">
+                <TableRow className="hover:bg-transparent border-white/5">
+                  <TableHead className="text-gray-400">Member</TableHead>
+                  <TableHead className="text-gray-400">Risk Level</TableHead>
+                  <TableHead className="text-gray-400">Days Inactive</TableHead>
+                  <TableHead className="text-gray-400">Value (MRR)</TableHead>
+                  <TableHead className="text-right text-gray-400">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {risk?.riskList?.map((member: any) => (
+                  <TableRow key={member.memberId} className="hover:bg-white/5 border-white/5 transition-colors">
+                    <TableCell className="font-medium text-gray-200">
+                      {member.username}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="destructive" className="bg-red-500/20 text-red-400 hover:bg-red-500/30 border-red-500/50">
+                        HIGH
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-gray-400">{member.daysInactive} days</TableCell>
+                    <TableCell className="text-green-400 font-mono">
+                      ${member.renewalPrice} <span className="text-xs text-gray-500">{member.currency}</span>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-8 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10"
+                        onClick={() => window.location.href = `mailto:${member.email}?subject=Risk Alert: Staying Active in the Community`}
+                      >
+                        Contact
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {(!risk?.riskList || risk.riskList.length === 0) && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center py-8 text-gray-500">
+                      No high-risk members detected based on current activity.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
     </div>
   );
 }

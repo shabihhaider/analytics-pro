@@ -1,58 +1,102 @@
 
 import { db } from '@/lib/db';
 import { members, revenueMetrics } from '@/lib/db/schema';
-import { sql, eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 
 /**
- * Calculates Monthly Recurring Revenue (MRR) from active memberships.
- * Returns a map of Currency -> MRR Amount
+ * Calculate MRR by currency from active memberships (scoped to optional userId for multi-tenancy)
  */
-export async function calculateMRR() {
-    // Aggregation: Sum renewal_price WHERE status = 'active' GROUP BY currency
-    const result = await db
-        .select({
-            currency: members.currency,
-            mrr: sql<number>`sum(${members.renewalPrice})`.mapWith(Number)
-        })
-        .from(members)
-        // Count ACTIVE and TRIALING subscriptions
-        .where(sql`${members.status} = 'active' OR ${members.status} = 'trialing'`)
-        .groupBy(members.currency);
+export async function calculateMRR(userId?: string): Promise<Record<string, number>> {
+    try {
+        // Get all active members, filtered by userId if provided
+        const activeMembers = await db.query.members.findMany({
+            where: userId
+                ? and(eq(members.status, 'active'), eq(members.userId, userId))
+                : eq(members.status, 'active')
+        });
 
-    // Transform to friendly object: { usd: 5000, eth: 1.2 }
-    const mrrByCurrency: Record<string, number> = {};
-    result.forEach(row => {
-        const cur = row.currency?.toLowerCase() || 'usd';
-        mrrByCurrency[cur] = row.mrr || 0;
-    });
+        // Group by currency and sum renewal prices
+        const mrrByCurrency: Record<string, number> = {};
 
-    return mrrByCurrency;
+        for (const member of activeMembers) {
+            const currency = member.currency || 'usd';
+            const price = parseFloat(member.renewalPrice || '0');
+
+            if (!mrrByCurrency[currency]) {
+                mrrByCurrency[currency] = 0;
+            }
+
+            mrrByCurrency[currency] += price;
+        }
+
+        return mrrByCurrency;
+
+    } catch (error) {
+        console.error('[Revenue] Error calculating MRR:', error);
+        return { usd: 0 };
+    }
 }
 
 /**
- * Snapshots the current MRR into the revenue_metrics table for historical tracking.
- * Typically run once a day by a cron job or sync trigger.
+ * Create a snapshot of revenue metrics for today
  */
-export async function snapshotRevenueMetrics(userId: string) {
-    const mrrData = await calculateMRR();
+export async function snapshotRevenueMetrics(userId: string): Promise<void> {
+    try {
+        console.log(`[Revenue] Creating revenue snapshot for user ${userId}...`);
 
-    // For MVP, we primarily track USD. 
-    // If multi-currency support expands, we'd need multiple rows or a json column.
-    // Here we default to storing the 'usd' value in the main column.
-    const usdMrr = mrrData['usd'] || 0;
+        // Calculate MRR (SCOPED to user)
+        const mrrByCurrency = await calculateMRR(userId);
+        const mrrUsd = mrrByCurrency.usd || 0;
 
-    const today = new Date().toISOString().split('T')[0];
+        // Count active members (SCOPED to user)
+        const activeMembersResult = await db
+            .select({ count: sql<number>`count(*)` })
+            .from(members)
+            .where(and(
+                eq(members.status, 'active'),
+                eq(members.userId, userId)
+            ));
 
-    await db.insert(revenueMetrics).values({
-        userId,
-        date: today,
-        mrr: usdMrr.toString(),
-        totalRevenue: usdMrr.toString(), // Simplified for MVP
-    }).onConflictDoUpdate({
-        target: [revenueMetrics.id], // Note: Schema needs composite key for proper upsert if strictly by date
-        set: {
-            mrr: usdMrr.toString(),
-            // updatedAt not in schema, removing
+        const activeCount = Number(activeMembersResult[0]?.count || 0);
+
+        // Get today's date
+        const today = new Date().toISOString().split('T')[0];
+
+        // Check if snapshot already exists for today
+        const existing = await db.query.revenueMetrics.findFirst({
+            where: and(
+                eq(revenueMetrics.userId, userId),
+                eq(revenueMetrics.date, today)
+            )
+        });
+
+        if (existing) {
+            // Update existing snapshot
+            await db
+                .update(revenueMetrics)
+                .set({
+                    mrr: mrrUsd.toString(),
+                    activeMembers: activeCount,
+                    totalRevenue: mrrUsd.toString()
+                })
+                .where(eq(revenueMetrics.id, existing.id));
+
+            console.log('[Revenue] ✅ Updated revenue snapshot');
+        } else {
+            // Create new snapshot
+            await db.insert(revenueMetrics).values({
+                userId: userId,
+                date: today,
+                mrr: mrrUsd.toString(),
+                activeMembers: activeCount,
+                totalRevenue: mrrUsd.toString()
+            });
+
+            console.log('[Revenue] ✅ Created revenue snapshot');
         }
-    });
+
+    } catch (error) {
+        console.error('[Revenue] Error creating snapshot:', error);
+        throw error;
+    }
 }

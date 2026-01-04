@@ -1,266 +1,321 @@
-import { Whop } from '@whop/sdk';
 import { db } from '@/lib/db';
-import { members, engagementMetrics, users } from '@/lib/db/schema';
-import { sql, eq, and } from 'drizzle-orm';
-
-const MAX_CHANNELS_TO_SCAN = 5;
-const MESSAGES_PER_CHANNEL = 100;
+import { members, users, engagementMetrics } from '@/lib/db/schema';
+import { createWhopClient } from '@/lib/whop/client';
+import { eq } from 'drizzle-orm';
+import { snapshotRevenueMetrics } from '@/lib/whop/revenue';
 
 export class WhopSync {
-    private whop: Whop;
+    private companyId: string;
+    private userId: string;
+    private token?: string;
 
-    constructor(token?: string) {
-        this.whop = new Whop({
-            apiKey: process.env.WHOP_API_KEY,
-        });
+    /**
+     * @param companyId - The company to sync data for (from authenticated user)
+     * @param userId - The database user ID
+     * @param token - Optional user token for authenticated API calls
+     */
+    constructor(companyId: string, userId: string, token?: string) {
+        this.companyId = companyId;
+        this.userId = userId;
+        this.token = token;
     }
 
     /**
-     * Syncs all members from the company to the local database.
-     * Uses ON CONFLICT to avoid duplicates.
+     * Sync all members from Whop to database
      */
-    async syncCompanyMembers() {
+    async syncCompanyMembers(): Promise<void> {
+        console.log(`[Sync] Starting member sync for company: ${this.companyId}`);
+
         try {
-            console.log('Starting member sync...');
-            const companyId = process.env.WHOP_COMPANY_ID;
-            if (!companyId) throw new Error("WHOP_COMPANY_ID is missing");
+            // Create Whop client (uses token if provided, otherwise app key)
+            const whop = createWhopClient(this.token);
 
-            // Fetch members from Whop
-            // SDK uses 'first' for pagination limit, not 'per_page'
-            console.log('Using Company ID:', companyId);
+            // Fetch ALL memberships for THIS company
+            let allMemberships: any[] = [];
+            let cursor: string | undefined;
+            let hasMore = true;
 
-            // Fetch Plans to build Price Map
-            // Fetch Plans to build Price Map
-            // Wrap in try-catch so permission errors don't block the entire sync
-            const planMap = new Map<string, { price: number, currency: string }>();
-            try {
-                const plansResponse = await this.whop.plans.list({
-                    company_id: companyId,
-                    first: 100
-                });
-                const plans = plansResponse.data || [];
+            while (hasMore) {
+                console.log(`[Sync] Fetching page with cursor: ${cursor || 'initial'} for company ${this.companyId}...`);
 
-                for (const p of plans as any[]) {
-                    const price = Number(p.renewal_price || 0);
-                    const currency = p.currency || 'usd';
+                const response: any = await whop.memberships.list({
+                    company_id: this.companyId,
+                    limit: 100,
+                    cursor: cursor
+                } as any);
 
-                    if (price > 0) {
-                        planMap.set(p.id, { price, currency });
-                    }
+                if (!response.data || response.data.length === 0) {
+                    hasMore = false;
+                    break;
                 }
-            } catch (error: any) {
-                console.warn('Revenue Sync Warning: Could not fetch plans. Missing "plan:read" scope?', error.message);
-                // Continue without revenue data (defaults to 0)
+
+                allMemberships.push(...response.data);
+                console.log(`[Sync] Fetched ${response.data.length} memberships`);
+
+                if (response.pagination?.next_page) {
+                    cursor = response.pagination.next_page;
+                    // Protect against infinite loop if cursor doesn't change
+                    if (!cursor) hasMore = false;
+                } else if (response.meta?.next_cursor) {
+                    cursor = response.meta.next_cursor;
+                } else {
+                    hasMore = false;
+                }
+
+                if (hasMore) {
+                    await this.sleep(100);
+                }
             }
 
-            const response = await this.whop.memberships.list({
-                first: 100,
-                company_id: process.env.WHOP_COMPANY_ID
-            });
-            const whopMembers = response.data;
+            console.log(`[Sync] Total memberships fetched: ${allMemberships.length}`);
 
-            if (!whopMembers || whopMembers.length === 0) {
-                console.log('No members found to sync.');
-                return;
-            }
+            // Sync each membership to database
+            let successCount = 0;
+            for (const membership of allMemberships) {
+                try {
+                    // Validate critical fields
+                    if (!membership.user || !membership.user.id) {
+                        console.warn(`[Sync] Skipping membership ${membership.id}: Missing user data. Raw:`, JSON.stringify(membership, null, 2));
+                        continue;
+                    }
 
-            console.log(`Fetched ${whopMembers.length} members. Upserting to DB...`);
+                    if (!membership.created_at) {
+                        console.warn(`[Sync] Skipping membership ${membership.id}: Missing created_at. Raw:`, JSON.stringify(membership, null, 2));
+                        continue;
+                    }
 
-            for (const member of whopMembers) {
-                // 1. Upsert User
-                if (member.user) {
-                    await db.insert(users).values({
-                        whopUserId: member.user.id,
-                        whopCompanyId: process.env.NEXT_PUBLIC_WHOP_APP_ID || 'unknown',
-                        username: member.user.username,
-                        email: '', // Email not available in Membership User object
+
+                    // --- DATE PARSING FIX ---
+                    // API returns ISO strings (e.g. "2025-12-28T19:06:37.878Z"), not unix timestamps
+                    const joinedAt = new Date(membership.created_at);
+
+                    if (isNaN(joinedAt.getTime())) {
+                        console.warn(`[Sync] Skipping membership ${membership.id}: Invalid joinedAt date (Value: ${membership.created_at})`);
+                        continue;
+                    }
+
+                    const cancelledAt = membership.cancelled_at ? new Date(membership.cancelled_at) : null;
+
+
+                    // --- USER DATA FIX ---
+                    if (!membership.user || !membership.user.id) {
+                        // Some test memberships might have null user? 
+                        // If so, we can't link it to a user in our DB.
+                        // However, checking the raw log, it seems 'member' object exists: { id: "mber_..." }
+                        // But 'user' is null. This implies a "guest" or "unclaimed" membership?
+                        console.warn(`[Sync] Skipping membership ${membership.id}: Missing 'user' object. Raw payload indicates 'user': null.`);
+                        continue;
+                    }
+
+                    // Get or create whop_user
+                    let whopUser = await db.query.users.findFirst({
+                        where: eq(users.whopUserId, membership.user.id)
+                    });
+
+                    if (!whopUser) {
+                        const [newWhopUser] = await db.insert(users).values({
+                            whopUserId: membership.user.id,
+                            whopCompanyId: this.companyId,
+                            username: membership.user.username || 'Unknown',
+                            email: membership.user.email || null
+                        }).returning();
+                        whopUser = newWhopUser;
+                    }
+
+                    // Upsert member
+                    await db.insert(members).values({
+                        userId: this.userId,
+                        whopMemberId: membership.user.id,
+                        whopMembershipId: membership.id,
+                        email: membership.user.email || null,
+                        status: membership.status,
+                        joinedAt: joinedAt,
+                        cancelledAt: cancelledAt,
+                        productId: membership.product,
+                        planId: membership.plan,
+                        renewalPrice: membership.plan_renewal_price?.toString() || '0',
+                        currency: membership.plan_currency || 'usd',
+                        metadata: membership
                     }).onConflictDoUpdate({
-                        target: users.whopUserId,
+                        target: [members.whopMembershipId],
                         set: {
-                            username: member.user.username,
+                            status: membership.status,
+                            email: membership.user.email || null,
+                            renewalPrice: membership.plan_renewal_price?.toString() || '0',
+                            currency: membership.plan_currency || 'usd',
                             updatedAt: new Date()
                         }
                     });
+
+                    successCount++;
+
+                } catch (error) {
+                    console.error(`[Sync] Error syncing member ${membership.id}:`, error);
                 }
-
-                // 2. Get internal User ID
-                const dbUser = await db.query.users.findFirst({
-                    where: eq(users.whopUserId, member.user?.id || '')
-                });
-
-                if (!dbUser) continue;
-
-                // 3. Upsert Member
-                // Whop timestamp is in seconds
-                const joinedMs = member.created_at ? parseInt(member.created_at) * 1000 : Date.now();
-
-                // MRR Logic: Look up Plan details from our pre-fetched map
-                let finalRenewalPrice = '0';
-                let currency = 'usd';
-
-                if (member.plan && member.plan.id) {
-                    const planData = planMap.get(member.plan.id);
-                    if (planData) {
-                        finalRenewalPrice = planData.price.toString();
-                        currency = planData.currency.toLowerCase();
-                    }
-                }
-
-                await db.insert(members).values({
-                    userId: dbUser.id,
-                    whopMemberId: member.member?.id || member.id,
-                    whopMembershipId: member.id,
-                    email: '',
-                    status: member.status,
-                    joinedAt: new Date(joinedMs),
-                    productId: member.product?.id || '',
-                    planId: member.plan?.id || '',
-                    renewalPrice: finalRenewalPrice,
-                    currency: currency,
-                }).onConflictDoUpdate({
-                    target: members.whopMembershipId,
-                    set: {
-                        status: member.status,
-                        renewalPrice: finalRenewalPrice,
-                        currency: currency,
-                        updatedAt: new Date()
-                    }
-                });
             }
 
-            console.log('Member sync complete.');
+            console.log(`[Sync] ✅ Synced ${successCount}/${allMemberships.length} members successfully for company ${this.companyId}`);
+
+            // After syncing members, snapshot revenue metrics for THIS user
+            await snapshotRevenueMetrics(this.userId);
+
         } catch (error) {
-            console.error('Failed to sync members:', error);
+            console.error('[Sync] Error syncing members:', error);
             throw error;
         }
     }
 
     /**
-     * Syncs recent messages to calculate engagement metrics.
-     * Scans Top 5 active channels -> Last 100 messages.
-     * Updates 'engagement_metrics' table.
+     * Sync recent messages and calculate engagement scores
      */
-    async syncRecentMessages() {
+    async syncRecentMessages(): Promise<void> {
+        console.log(`[Sync] Starting message sync for company: ${this.companyId}`);
+
         try {
-            console.log('Starting message sync...');
+            const whop = createWhopClient(this.token);
 
-            // 1. Fetch Channels
-            // Requires company_id
-            const companyId = process.env.WHOP_COMPANY_ID;
-            if (!companyId) throw new Error("WHOP_COMPANY_ID is missing");
+            // Fetch channels
+            console.log('[Sync] Fetching channels...');
+            let channels: any[] = [];
 
-            const channelsResponse = await this.whop.chatChannels.list({
-                company_id: companyId,
-                first: 20
-            });
-            const channels = channelsResponse.data;
+            try {
+                const channelsResponse: any = await whop.chatChannels.list({
+                    company_id: this.companyId,
+                    limit: 10
+                } as any);
 
-            if (!channels || channels.length === 0) {
-                console.log('No chat channels found.');
+                channels = channelsResponse.data || [];
+                console.log(`[Sync] Found ${channels.length} channels`);
+            } catch (error) {
+                console.warn('[Sync] Could not fetch channels (chat may not be enabled):', error);
+                channels = [];
+            }
+
+            // If no channels, we can't calculate engagement from messages
+            if (channels.length === 0) {
+                console.log('[Sync] No channels found, calculating engagement from membership activity only');
+                await this.calculateEngagementWithoutMessages(this.userId);
                 return;
             }
 
-            // Log selected channels for debugging (Constraint #1)
-            const selectedChannels = channels.slice(0, MAX_CHANNELS_TO_SCAN);
-            // Channel name is deep in experience.name
-            console.log('Selected Channels for Sync:', selectedChannels.map(c => `${c.experience?.name || 'Chat'} (${c.id})`));
+            // Fetch messages from each channel
+            const messagesByUser = new Map<string, number>();
 
-            const dailyActivity: Record<string, number> = {}; // whopUserId -> messageCount
+            for (const channel of channels.slice(0, 5)) { // Top 5 channels
+                try {
+                    const messagesResponse: any = await whop.messages.list({
+                        channel_id: channel.id,
+                        limit: 100
+                    } as any);
+
+                    const messages = messagesResponse.data || [];
+
+                    // Count messages per user
+                    for (const message of messages) {
+                        const userId = message.user_id;
+                        messagesByUser.set(userId, (messagesByUser.get(userId) || 0) + 1);
+                    }
+
+                } catch (error) {
+                    console.warn(`[Sync] Error fetching messages for channel ${channel.id}:`, error);
+                }
+
+                // Rate limit protection
+                await this.sleep(100);
+            }
+
+            console.log(`[Sync] Counted messages for ${messagesByUser.size} users`);
+
+            // Calculate engagement for each member
+            const allMembers = await db.query.members.findMany({
+                where: eq(members.userId, this.userId)
+            });
+
             const today = new Date().toISOString().split('T')[0];
 
-            // 2. Fetch Messages from each channel
-            for (const channel of selectedChannels) {
-                try {
-                    const messagesResponse = await this.whop.messages.list({
-                        channel_id: channel.id,
-                        first: MESSAGES_PER_CHANNEL
-                    });
+            for (const member of allMembers) {
+                const messageCount = messagesByUser.get(member.whopMemberId) || 0;
+                const engagementScore = this.calculateEngagementScore(member, messageCount);
 
-                    const messages = messagesResponse.data;
-                    console.log(`Fetched ${messages.length} messages from ${channel.experience?.name}`);
-
-                    for (const msg of messages) {
-                        const msgDate = new Date(msg.created_at).toISOString().split('T')[0];
-                        if (msgDate === today && msg.user) {
-                            const uid = msg.user.id;
-                            dailyActivity[uid] = (dailyActivity[uid] || 0) + 1;
-                        }
-                    }
-
-                } catch (err: any) {
-                    // Rate Limit Handling (Constraint #2)
-                    if (err?.status === 429) {
-                        console.warn(`Rate limit hit for channel ${channel.id}. Skipping...`);
-                        continue;
-                    }
-                    console.error(`Error fetching messages for ${channel.id}:`, err);
-                }
-            }
-
-            console.log('Daily activity aggregated:', dailyActivity);
-
-            // 3. Update Engagement Metrics in DB
-            for (const [whopUserId, count] of Object.entries(dailyActivity)) {
-                // Find internal member/user ID
-                const dbUser = await db.query.users.findFirst({
-                    where: eq(users.whopUserId, whopUserId),
-                    with: {
-                        members: true
-                    }
-                });
-
-                if (!dbUser || !dbUser.members[0]) continue;
-                const member = dbUser.members[0];
-
-                // Calculate Score
-                const score = this.calculateEngagementScore(count, member.joinedAt || new Date());
-
+                // Upsert engagement metric
                 await db.insert(engagementMetrics).values({
+                    userId: this.userId,
                     memberId: member.id,
-                    userId: dbUser.id,
                     date: today,
-                    messageCount: count,
-                    activityScore: count,
-                    engagementScore: score.toString(),
-                    lastActiveAt: new Date()
+                    messageCount: messageCount,
+                    activityScore: messageCount > 0 ? 100 : 0,
+                    lastActiveAt: messageCount > 0 ? new Date() : (member.joinedAt || new Date()),
+                    engagementScore: engagementScore.toString()
                 }).onConflictDoUpdate({
-                    target: [engagementMetrics.memberId, engagementMetrics.date], // Composite PK
+                    target: [engagementMetrics.memberId, engagementMetrics.date],
                     set: {
-                        messageCount: count,
-                        activityScore: count,
-                        engagementScore: score.toString(),
-                        lastActiveAt: new Date()
+                        messageCount: messageCount,
+                        activityScore: messageCount > 0 ? 100 : 0,
+                        lastActiveAt: messageCount > 0 ? new Date() : (member.joinedAt || new Date()),
+                        engagementScore: engagementScore.toString()
                     }
                 });
             }
 
-            console.log('Message sync and metrics update complete.');
+            console.log(`[Sync] ✅ Calculated engagement for ${allMembers.length} members`);
 
         } catch (error) {
-            console.error('Global sync error:', error);
+            console.error('[Sync] Error syncing messages:', error);
             throw error;
         }
     }
 
-    calculateEngagementScore(messagesSent: number, joinedAt: Date): number {
-        let msgScore = messagesSent * 5;
-        if (msgScore > 50) msgScore = 50;
+    private async calculateEngagementWithoutMessages(userId: string): Promise<void> {
+        const allMembers = await db.query.members.findMany({
+            where: eq(members.userId, userId)
+        });
+
+        const today = new Date().toISOString().split('T')[0];
+
+        for (const member of allMembers) {
+            const daysSinceJoin = Math.floor(
+                (Date.now() - (member.joinedAt?.getTime() || Date.now())) / (1000 * 60 * 60 * 24)
+            );
+
+            let loyaltyScore = 0;
+            if (daysSinceJoin > 30) loyaltyScore = 50;
+            else if (daysSinceJoin > 7) loyaltyScore = 30;
+            else loyaltyScore = 10;
+
+            const engagementScore = Math.min(100, loyaltyScore);
+
+            await db.insert(engagementMetrics).values({
+                userId: userId,
+                memberId: member.id,
+                date: today,
+                messageCount: 0,
+                activityScore: 0,
+                lastActiveAt: member.joinedAt || new Date(),
+                engagementScore: engagementScore.toString()
+            }).onConflictDoUpdate({
+                target: [engagementMetrics.memberId, engagementMetrics.date],
+                set: {
+                    engagementScore: engagementScore.toString()
+                }
+            });
+        }
+    }
+
+    private calculateEngagementScore(member: any, messageCount: number): number {
+        const activityScore = Math.min(50, messageCount * 5);
+        const daysSinceJoin = Math.floor(
+            (Date.now() - (member.joinedAt?.getTime() || Date.now())) / (1000 * 60 * 60 * 24)
+        );
 
         let loyaltyScore = 0;
-        const daysSinceJoined = (new Date().getTime() - joinedAt.getTime()) / (1000 * 3600 * 24);
+        if (daysSinceJoin > 30) loyaltyScore = 50;
+        else if (daysSinceJoin > 7) loyaltyScore = 30;
+        else loyaltyScore = 10;
 
-        if (daysSinceJoined < 7) {
-            loyaltyScore = 50;
-        } else if (daysSinceJoined < 30) {
-            loyaltyScore = 30;
-        } else {
-            loyaltyScore = 50;
-        }
+        return Math.min(100, activityScore + loyaltyScore);
+    }
 
-        if (messagesSent === 0) {
-            return 0;
-        }
-
-        return Math.min(100, msgScore + loyaltyScore);
+    private sleep(ms: number): Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 }

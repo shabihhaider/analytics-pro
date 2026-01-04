@@ -1,0 +1,91 @@
+
+import { config } from 'dotenv';
+config({ path: '.env.local' });
+import { db } from '@/lib/db';
+import { revenueMetrics, users } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
+
+async function seedHistory() {
+    console.log('Seeding historical data...');
+
+    // Get Admin User
+    const companyId = process.env.WHOP_COMPANY_ID;
+    if (!companyId) throw new Error("WHOP_COMPANY_ID missing");
+
+    const user = await db.query.users.findFirst({
+        where: eq(users.whopCompanyId, companyId)
+    });
+
+    if (!user) {
+        throw new Error("No user found. Please sync member data first.");
+    }
+
+    console.log('Seeding for user:', user.username);
+
+    // Generate 30 days of data
+    const today = new Date();
+
+    for (let i = 29; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(today.getDate() - i);
+        const dateStr = d.toISOString().split('T')[0];
+
+        // Randomish MRR trend (Linear growth + noise)
+        const baseMrr = 1000;
+        const growth = (30 - i) * 100; // +100 per day
+        const noise = Math.random() * 500 - 250;
+        const mrr = Math.round(baseMrr + growth + noise);
+
+        const activeMembers = Math.round(mrr / 50); // Approx $50 ARPU
+
+        await db.insert(revenueMetrics).values({
+            userId: user.id,
+            date: dateStr,
+            mrr: mrr.toString(),
+            activeMembers: activeMembers,
+            totalRevenue: mrr.toString()
+        }).onConflictDoUpdate({
+            target: [revenueMetrics.id], // Note: ID conflict unlikely, but we use logic to update if date matched (schema lacks date constraint, but let's just insert for now as we cleaned up)
+            // Actually, wait, schema DOES NOT have unique constraint on date.
+            // But our app logic does.
+            // For seeding, I'll check existence first to be safe.
+            set: { mrr: mrr.toString() }
+        });
+
+        // Manual check since onConflict works on constraints
+        // const start = Date.now();
+        // await db.delete(revenueMetrics).where(and(eq(revenueMetrics.userId, user.id), eq(revenueMetrics.date, dateStr)));
+        // ...
+    }
+
+    // Better: Clean all history first
+    await db.delete(revenueMetrics).where(eq(revenueMetrics.userId, user.id));
+
+    const values = [];
+    for (let i = 29; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(today.getDate() - i);
+        const dateStr = d.toISOString().split('T')[0];
+
+        const baseMrr = 1000;
+        const growth = (30 - i) * 150;
+        const noise = Math.random() * 200 - 100;
+        const mrr = Math.round(baseMrr + growth + noise);
+        const members = Math.round(mrr / 50);
+
+        values.push({
+            userId: user.id,
+            date: dateStr,
+            mrr: mrr.toString(),
+            activeMembers: members,
+            totalRevenue: mrr.toString()
+        });
+    }
+
+    await db.insert(revenueMetrics).values(values);
+
+    console.log(`✅ Inserted ${values.length} days of history.`);
+    process.exit(0);
+}
+
+seedHistory().catch(console.error);

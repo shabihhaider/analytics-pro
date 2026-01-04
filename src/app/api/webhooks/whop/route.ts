@@ -1,6 +1,7 @@
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { Whop } from '@whop/sdk';
+import { WhopSync } from '@/lib/whop/sync';
 
 export async function POST(req: Request) {
     try {
@@ -31,19 +32,58 @@ export async function POST(req: Request) {
         switch (eventType) {
             case 'membership.went_valid':
             case 'membership.activated':
-                // Handle new member
-                break;
             case 'membership.went_invalid':
             case 'membership.deactivated':
-                // Handle cancelled/expired member
+                // For critical membership changes, run a full sync to be safe
+                // Logic: Find the company owner/admin to attach the sync to
+                const companyId = payload.company_id || (payload.data && payload.data.company_id);
+                if (companyId) {
+                    const { db } = await import('@/lib/db');
+                    const { users } = await import('@/lib/db/schema');
+                    const { eq } = await import('drizzle-orm');
+
+                    const adminUser = await db.query.users.findFirst({
+                        where: eq(users.whopCompanyId, companyId)
+                    });
+
+                    if (adminUser) {
+                        const sync = new WhopSync(companyId, adminUser.id);
+                        await sync.syncCompanyMembers();
+                        console.log('Webhook: Triggered full member sync for company', companyId);
+                    } else {
+                        console.warn('Webhook: Could not find admin user for company', companyId);
+                    }
+                }
                 break;
+
             case 'payment.succeeded':
-                // Handle revenue
+                // handle revenue update
+                const pCompanyId = payload.company_id || (payload.data && payload.data.company_id);
+                if (pCompanyId) {
+                    const { db } = await import('@/lib/db');
+                    const { users } = await import('@/lib/db/schema');
+                    const { eq } = await import('drizzle-orm');
+
+                    const adminUser = await db.query.users.findFirst({
+                        where: eq(users.whopCompanyId, pCompanyId)
+                    });
+
+                    if (adminUser) {
+                        const revSync = new WhopSync(pCompanyId, adminUser.id);
+                        await revSync.syncCompanyMembers(); // Revenue is calculated from members
+                    }
+                }
                 break;
+
             case 'message.sent':
+                // For high frequency events, we might want to debounce or queue
+                // For MVP, we'll just log or run a light sync if needed
+                console.log('Webhook: Message received (skipping full sync to avoid rate limits)');
+                break;
+
             case 'course.progress':
             case 'order.created':
-                // Update activity_score
+                console.log(`Webhook: Received ${eventType} (logic pending)`);
                 break;
             default:
                 console.log(`Unhandled webhook event: ${eventType}`);

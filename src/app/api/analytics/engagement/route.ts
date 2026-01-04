@@ -1,14 +1,18 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { engagementMetrics, members, users } from '@/lib/db/schema';
-import { desc, eq, sql } from 'drizzle-orm';
+import { desc, eq, sql, and } from 'drizzle-orm';
+import { getUser } from '@/lib/auth/get-user';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
     try {
-        // In a real app, verify user session/auth here using headers() or middleware context
-        // const token = req.headers.get('x-whop-user-token');
+        // ✅ AUTHENTICATE USER FIRST
+        const user = await getUser(req);
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
 
         // Fetch Today's Stats
         const today = new Date().toISOString().split('T')[0];
@@ -20,7 +24,12 @@ export async function GET(req: Request) {
                 activeUsers: sql<number>`count(${engagementMetrics.userId})`
             })
             .from(engagementMetrics)
-            .where(eq(engagementMetrics.date, today));
+            .where(
+                and(
+                    eq(engagementMetrics.date, today),
+                    eq(engagementMetrics.userId, user.id) // ← SCOPED!
+                )
+            );
 
         const stats = avgScoreResult[0] || { avgScore: 0, activeUsers: 0 };
 
@@ -35,7 +44,12 @@ export async function GET(req: Request) {
             })
             .from(engagementMetrics)
             .innerJoin(users, eq(engagementMetrics.userId, users.id))
-            .where(eq(engagementMetrics.date, today))
+            .where(
+                and(
+                    eq(engagementMetrics.date, today),
+                    eq(engagementMetrics.userId, user.id) // ← SCOPED!
+                )
+            )
             .orderBy(desc(engagementMetrics.engagementScore))
             .limit(10);
 

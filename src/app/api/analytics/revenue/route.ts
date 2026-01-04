@@ -3,27 +3,37 @@ import { NextResponse } from 'next/server';
 import { calculateMRR } from '@/lib/whop/revenue';
 import { db } from '@/lib/db';
 import { members } from '@/lib/db/schema';
-import { sql, eq } from 'drizzle-orm';
+import { sql, eq, and } from 'drizzle-orm';
+import { getUser } from '@/lib/auth/get-user';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: Request) {
     try {
-        // middleware handles auth, so if we are here we are good (or in dev mode)
+        // ✅ AUTHENTICATE USER FIRST
+        const user = await getUser(req);
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
 
-        // 1. Calculate MRR
-        const mrrByCurrency = await calculateMRR();
+        // 1. Calculate MRR for THIS USER ONLY
+        const mrrByCurrency = await calculateMRR(user.id);
 
-        // 2. Get Active Subscription Count
+        // 2. Get Active Subscription Count for THIS USER ONLY
+        // Note: Drizzle syntax for sql with logical AND inside where
         const activeSubs = await db
             .select({ count: sql<number>`count(*)` })
             .from(members)
-            .where(sql`${members.status} = 'active' OR ${members.status} = 'trialing'`);
+            .where(
+                and(
+                    sql`${members.status} = 'active' OR ${members.status} = 'trialing'`,
+                    eq(members.userId, user.id) // ← SCOPED!
+                )
+            );
 
         return NextResponse.json({
-            mrr: mrrByCurrency, // { usd: 1234.56 }
-            activeMembers: activeSubs[0].count,
-            // Future: churnRate, historical charts
+            mrr: mrrByCurrency,
+            activeMembers: Number(activeSubs[0]?.count || 0),
         });
 
     } catch (error) {

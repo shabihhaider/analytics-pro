@@ -1,26 +1,46 @@
 import { NextResponse } from 'next/server';
 import { WhopSync } from '@/lib/whop/sync';
+import { getUser } from '@/lib/auth/get-user';
 
 export const maxDuration = 60; // Allow longer timeout for sync
 
 export async function POST(req: Request) {
     try {
-        // In production, protect this route with Admin check
+        // Get authenticated user
+        // This extracts THEIR company ID from the token
+        const user = await getUser(req);
 
-        // Instantiate Sync
-        // We pass undefined for token if using API Key from env, 
-        // or pass `req.headers.get('x-whop-user-token')` if SDK needs user context
-        const token = req.headers.get('x-whop-user-token') || undefined;
-        const syncer = new WhopSync(token!);
+        if (!user) {
+            return NextResponse.json(
+                { error: 'Unauthorized' },
+                { status: 401 }
+            );
+        }
 
-        // Run Syncs
+        console.log(`[API] Starting sync for company: ${user.whopCompanyId}`);
+
+        // Create sync instance for THIS user's company
+        // NOT a hardcoded company!
+        const syncer = new WhopSync(
+            user.whopCompanyId, // ← Dynamic! Changes based on who's logged in
+            user.id,
+            user.token
+        );
+
+        // Run syncs
         await syncer.syncCompanyMembers();
         await syncer.syncRecentMessages();
 
-        return NextResponse.json({ success: true, message: 'Sync complete' });
+        return NextResponse.json({
+            success: true,
+            message: `Sync complete for company ${user.whopCompanyId}`
+        });
 
     } catch (error) {
-        console.error('Sync failed:', error);
-        return NextResponse.json({ error: 'Sync failed' }, { status: 500 });
+        console.error('[API] Sync failed:', error);
+        return NextResponse.json({
+            error: 'Sync failed',
+            details: error instanceof Error ? error.message : String(error)
+        }, { status: 500 });
     }
 }
