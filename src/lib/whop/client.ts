@@ -9,24 +9,40 @@ if (!process.env.WHOP_API_KEY) {
  * Create a Whop client dynamically.
  * @param token - Optional user token for authenticated requests.
  */
-export function createWhopClient(token?: string) {
-    return new Whop({
-        apiKey: token || process.env.WHOP_API_KEY!
-    });
-}
+// Official Whop SDK pattern
+export const whopClient = new Whop({
+    apiKey: process.env.WHOP_API_KEY!,
+    appID: process.env.NEXT_PUBLIC_WHOP_APP_ID
+});
 
-// Default client using the server-side key
-export const whopClient = createWhopClient();
+/**
+ * Verify user token from request headers (official method)
+ */
+export async function verifyWhopUserToken(headers: Headers): Promise<{ userId: string }> {
+    const token = headers.get('x-whop-user-token');
+
+    if (!token) {
+        throw new Error('No token found in headers');
+    }
+
+    try {
+        // Use the official SDK method
+        return await whopClient.verifyUserToken(token);
+    } catch (error) {
+        console.error('[Whop] Token verification failed:', error);
+        throw error;
+    }
+}
 
 /**
  * Extract company ID from a user token.
  */
 export async function getCompanyIdFromToken(token: string): Promise<string> {
     try {
-        const client = createWhopClient(token);
-        const user = await client.users.retrieve('me');
+        const user = await whopClient.users.retrieve('me', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
 
-        // Type definition might be missing company_id or using camelCase
         const userData = user as any;
 
         if (!userData.company_id && !userData.companyId) {

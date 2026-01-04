@@ -34,33 +34,16 @@ export default function DashboardPage() {
   const [history, setHistory] = useState<any>([]);
   const [insight, setInsight] = useState<string>("");
   const [loading, setLoading] = useState(true);
-  const [mounted, setMounted] = useState(false); // Track client-side mounting
-
-  // Set mounted flag after hydration
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   useEffect(() => {
-    if (!mounted) return; // Don't fetch until after hydration
-
     async function fetchData() {
-      // Robust Auth: Get token from global window object injected by layout
-      // This bypasses cookie blocking in iframes
-      const token = (window as any).WHOP_TOKEN;
-      const headers = new Headers();
-      if (token) {
-        headers.set('x-whop-user-token', token);
-        headers.set('Authorization', `Bearer ${token}`);
-      }
-
       try {
         const responses = await Promise.all([
-          fetch('/api/analytics/engagement', { headers }),
-          fetch('/api/analytics/revenue', { headers }),
-          fetch('/api/analytics/risk', { headers }),
-          fetch('/api/analytics/history', { headers }),
-          fetch('/api/analytics/insight', { headers })
+          fetch('/api/analytics/engagement'),
+          fetch('/api/analytics/revenue'),
+          fetch('/api/analytics/risk'),
+          fetch('/api/analytics/history'),
+          fetch('/api/analytics/insight')
         ]);
 
         // Debug: Check for failures
@@ -92,7 +75,7 @@ export default function DashboardPage() {
       }
     }
     fetchData();
-  }, [mounted]);
+  }, []);
 
   return (
     <div className="p-8 space-y-8 min-h-screen bg-[#0a0a0a] text-white font-sans selection:bg-purple-500/30">
@@ -111,13 +94,7 @@ export default function DashboardPage() {
           onClick={async () => {
             const toastId = toast.loading("Syncing latest data...");
             try {
-              const token = mounted ? (window as any).WHOP_TOKEN : '';
-              const headers = new Headers();
-              if (token) {
-                headers.set('x-whop-user-token', token);
-                headers.set('Authorization', `Bearer ${token}`);
-              }
-              await fetch('/api/sync', { method: 'POST', headers });
+              await fetch('/api/sync', { method: 'POST' });
               toast.success("Sync complete!", { id: toastId });
               window.location.reload();
             } catch (e) {
@@ -130,12 +107,7 @@ export default function DashboardPage() {
         </Button>
       </div>
 
-      {/* Debug Info - Remove before final ship */}
-      {mounted && process.env.NODE_ENV === 'development' && (
-        <div className="text-xs text-center text-gray-500 font-mono py-2">
-          Auth Debug: Token {(window as any).WHOP_TOKEN ? 'Present' : 'Missing'}
-        </div>
-      )}
+      {/* Debug Info (Removed) */}
 
       {/* AI Insight */}
       <div className="animate-in fade-in slide-in-from-top-8 duration-700 delay-100">

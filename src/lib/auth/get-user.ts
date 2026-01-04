@@ -1,7 +1,7 @@
 import { db } from '@/lib/db';
 import { users } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
-import { createWhopClient, getCompanyIdFromToken } from '@/lib/whop/client';
+import { verifyWhopUserToken, getCompanyIdFromToken } from '@/lib/whop/client';
 
 interface AuthenticatedUser {
     id: string;
@@ -9,55 +9,27 @@ interface AuthenticatedUser {
     whopCompanyId: string;
     username: string | null;
     email: string | null;
-    token: string; // We need to store this to make API calls on behalf of the user
+    token: string;
 }
 
 export async function getUser(request?: Request): Promise<AuthenticatedUser | null> {
     try {
-        // Extract token from request headers
-        let token: string | null = null;
-
-        if (request) {
-            // Priority 1: x-whop-user-token header (set by middleware)
-            token = request.headers.get('x-whop-user-token');
-
-            // Priority 2: Authorization Bearer header (set by client fetch)
-            if (!token) {
-                const authHeader = request.headers.get('authorization');
-                if (authHeader?.startsWith('Bearer ')) {
-                    token = authHeader.substring(7);
-                }
-            }
-        }
-
         // Development mode fallback
-        if (!token && process.env.NODE_ENV === 'development') {
-            console.log('[Auth] ⚠️ Development mode: No token provided');
-            console.log('[Auth] In production, token MUST be present');
-
-            // For local dev, you can still use a hardcoded company for testing
-            // But make it clear this is dev mode only
-            const DEV_COMPANY_ID = process.env.DEV_COMPANY_ID;
+        if (process.env.NODE_ENV === 'development' && !request) {
+            const DEV_COMPANY_ID = process.env.DEV_COMPANY_ID || process.env.WHOP_COMPANY_ID;
 
             if (!DEV_COMPANY_ID) {
-                // If DEV_COMPANY_ID is missing, we can try to fallback to WHOP_COMPANY_ID for backward compat during migration
-                // But ideally we want to enforce the new env var
-                const legacy = process.env.WHOP_COMPANY_ID;
-                if (!legacy) throw new Error('DEV_COMPANY_ID required for development mode');
-                console.warn('[Auth] Using legacy WHOP_COMPANY_ID as DEV_COMPANY_ID');
+                throw new Error('DEV_COMPANY_ID or WHOP_COMPANY_ID required for development mode');
             }
 
-            const targetCompanyId = process.env.DEV_COMPANY_ID || process.env.WHOP_COMPANY_ID!;
-
-            // Get or create dev user
             let user = await db.query.users.findFirst({
-                where: eq(users.whopCompanyId, targetCompanyId)
+                where: eq(users.whopCompanyId, DEV_COMPANY_ID)
             });
 
             if (!user) {
                 const [newUser] = await db.insert(users).values({
                     whopUserId: 'dev_user',
-                    whopCompanyId: targetCompanyId,
+                    whopCompanyId: DEV_COMPANY_ID,
                     email: 'dev@example.com',
                     username: 'Dev Admin',
                     subscriptionTier: 'pro'
@@ -71,36 +43,42 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
                 whopCompanyId: user.whopCompanyId,
                 username: user.username,
                 email: user.email,
-                token: '' // Empty string so client uses WHOP_API_KEY from env
+                token: process.env.WHOP_API_KEY || ''
             };
         }
 
-        if (!token) {
+        if (!request) {
             return null;
         }
 
-        // === CRITICAL: Extract the company ID from the token ===
-        // This makes your app multi-tenant!
-        const companyId = await getCompanyIdFromToken(token);
-        console.log('[Auth] Authenticated for company:', companyId);
+        // Extract token from headers (Whop sends it in x-whop-user-token)
+        const token = request.headers.get('x-whop-user-token');
 
-        // Get or create user in database for this company
+        if (!token) {
+            console.error('[Auth] No x-whop-user-token header found');
+            return null;
+        }
+
+        // Verify token using official SDK method
+        const { userId: whopUserId } = await verifyWhopUserToken(request.headers);
+
+        // Get company ID from token
+        const companyId = await getCompanyIdFromToken(token);
+
+        console.log('[Auth] Authenticated user:', whopUserId, 'Company:', companyId);
+
+        // Get or create user in database
         let user = await db.query.users.findFirst({
             where: eq(users.whopCompanyId, companyId)
         });
 
         if (!user) {
-            // Get user details from Whop
-            const client = createWhopClient(token);
-            // Fix: 'me' does not exist, use retrieve('me')
-            const whopUser = await client.users.retrieve('me') as any;
-
-            // Create new user in database
+            // Create new user
             const [newUser] = await db.insert(users).values({
-                whopUserId: whopUser.id,
+                whopUserId: whopUserId,
                 whopCompanyId: companyId,
-                email: whopUser.email || null,
-                username: whopUser.username || 'User',
+                email: null,
+                username: 'User',
                 subscriptionTier: 'free'
             }).returning();
 
@@ -114,7 +92,7 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
             whopCompanyId: user.whopCompanyId,
             username: user.username,
             email: user.email,
-            token: token // Store token for API calls
+            token: token
         };
 
     } catch (error) {

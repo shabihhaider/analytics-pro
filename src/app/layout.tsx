@@ -10,28 +10,13 @@ export const metadata: Metadata = {
 };
 
 import { headers } from 'next/headers';
-
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const headersList = headers();
-  const token = headersList.get('x-whop-user-token');
-
-  // Always render script tag with empty string if no token to avoid hydration mismatch
-  const tokenValue = token || '';
-
   return (
     <html lang="en">
-      <head>
-        {/* Move script to head and always render for consistent SSR/hydration */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `window.WHOP_TOKEN = ${JSON.stringify(tokenValue)};`,
-          }}
-        />
-      </head>
       <body className={inter.className}>
         {children}
       </body>

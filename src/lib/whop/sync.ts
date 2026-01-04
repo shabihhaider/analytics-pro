@@ -1,6 +1,6 @@
 import { db } from '@/lib/db';
 import { members, users, engagementMetrics } from '@/lib/db/schema';
-import { createWhopClient } from '@/lib/whop/client';
+import { whopClient } from '@/lib/whop/client';
 import { eq } from 'drizzle-orm';
 import { snapshotRevenueMetrics } from '@/lib/whop/revenue';
 
@@ -12,7 +12,7 @@ export class WhopSync {
     /**
      * @param companyId - The company to sync data for (from authenticated user)
      * @param userId - The database user ID
-     * @param token - Optional user token for authenticated API calls
+     * @param token - Optional user token (unused in new SDK pattern, kept for compatibility)
      */
     constructor(companyId: string, userId: string, token?: string) {
         this.companyId = companyId;
@@ -27,8 +27,8 @@ export class WhopSync {
         console.log(`[Sync] Starting member sync for company: ${this.companyId}`);
 
         try {
-            // Create Whop client (uses token if provided, otherwise app key)
-            const whop = createWhopClient(this.token);
+            // Use singleton Whop client (App Key)
+            const whop = whopClient;
 
             // Fetch ALL memberships for THIS company
             let allMemberships: any[] = [];
@@ -172,7 +172,7 @@ export class WhopSync {
         console.log(`[Sync] Starting message sync for company: ${this.companyId}`);
 
         try {
-            const whop = createWhopClient(this.token);
+            const whop = whopClient;
 
             // Fetch channels
             console.log('[Sync] Fetching channels...');
