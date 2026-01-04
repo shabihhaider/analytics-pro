@@ -12,7 +12,6 @@ import { Badge } from '@/components/ui/badge';
 import { RevenueChart } from "@/components/dashboard/revenue-chart";
 import { InsightCard } from "@/components/dashboard/insight-card";
 import { CoachChat } from "@/components/dashboard/coach-chat";
-import { useAuth } from "@/components/auth-context";
 
 interface EngagementData {
   stats: {
@@ -29,8 +28,6 @@ interface EngagementData {
 }
 
 export default function DashboardPage() {
-  const { token } = useAuth();
-
   const [metrics, setMetrics] = useState<any>(null);
   const [revenue, setRevenue] = useState<any>(null);
   const [risk, setRisk] = useState<any>(null);
@@ -40,8 +37,9 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function fetchData() {
-      // If no token in text/provider, and not in dev (cookie might handle it), we might want to wait?
-      // But adding the header is safe even if null.
+      // Robust Auth: Get token from global window object injected by layout
+      // This bypasses cookie blocking in iframes
+      const token = (window as any).WHOP_TOKEN;
       const headers = token ? { 'x-whop-user-token': token } : {};
 
       try {
@@ -72,7 +70,7 @@ export default function DashboardPage() {
       }
     }
     fetchData();
-  }, [token]);
+  }, []);
 
   return (
     <div className="p-8 space-y-8 min-h-screen bg-[#0a0a0a] text-white font-sans selection:bg-purple-500/30">
@@ -91,7 +89,9 @@ export default function DashboardPage() {
           onClick={async () => {
             const toastId = toast.loading("Syncing latest data...");
             try {
-              await fetch('/api/sync', { method: 'POST' });
+              const token = (window as any).WHOP_TOKEN;
+              const headers = token ? { 'x-whop-user-token': token } : {};
+              await fetch('/api/sync', { method: 'POST', headers });
               toast.success("Sync complete!", { id: toastId });
               window.location.reload();
             } catch (e) {
