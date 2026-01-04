@@ -37,13 +37,21 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function fetchData() {
+      // Get token that was injected by server
+      const token = (window as any).__WHOP_TOKEN__;
+
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['x-whop-user-token'] = token;
+      }
+
       try {
         const responses = await Promise.all([
-          fetch('/api/analytics/engagement'),
-          fetch('/api/analytics/revenue'),
-          fetch('/api/analytics/risk'),
-          fetch('/api/analytics/history'),
-          fetch('/api/analytics/insight')
+          fetch('/api/analytics/engagement', { headers }),
+          fetch('/api/analytics/revenue', { headers }),
+          fetch('/api/analytics/risk', { headers }),
+          fetch('/api/analytics/history', { headers }),
+          fetch('/api/analytics/insight', { headers })
         ]);
 
         // Debug: Check for failures
@@ -94,7 +102,13 @@ export default function DashboardPage() {
           onClick={async () => {
             const toastId = toast.loading("Syncing latest data...");
             try {
-              await fetch('/api/sync', { method: 'POST' });
+              const token = (window as any).__WHOP_TOKEN__;
+              const headers: Record<string, string> = {};
+              if (token) {
+                headers['x-whop-user-token'] = token;
+              }
+
+              await fetch('/api/sync', { method: 'POST', headers });
               toast.success("Sync complete!", { id: toastId });
               window.location.reload();
             } catch (e) {

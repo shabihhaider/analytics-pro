@@ -1,7 +1,7 @@
 import { db } from '@/lib/db';
 import { users } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
-import { verifyWhopUserToken, getCompanyIdFromToken } from '@/lib/whop/client';
+import { whopClient } from '@/lib/whop/client';
 
 interface AuthenticatedUser {
     id: string;
@@ -19,7 +19,8 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
             const DEV_COMPANY_ID = process.env.DEV_COMPANY_ID || process.env.WHOP_COMPANY_ID;
 
             if (!DEV_COMPANY_ID) {
-                throw new Error('DEV_COMPANY_ID or WHOP_COMPANY_ID required for development mode');
+                console.error('[Auth] DEV_COMPANY_ID required in development');
+                return null;
             }
 
             let user = await db.query.users.findFirst({
@@ -48,10 +49,11 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
         }
 
         if (!request) {
+            console.error('[Auth] No request provided');
             return null;
         }
 
-        // Extract token from headers (Whop sends it in x-whop-user-token)
+        // Extract token from headers
         const token = request.headers.get('x-whop-user-token');
 
         if (!token) {
@@ -59,13 +61,23 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
             return null;
         }
 
-        // Verify token using official SDK method
-        const { userId: whopUserId } = await verifyWhopUserToken(request.headers);
+        // Verify token with Whop
+        const verificationResult = await whopClient.verifyUserToken(token);
+        const whopUserId = verificationResult.userId;
 
-        // Get company ID from token
-        const companyId = await getCompanyIdFromToken(token);
+        // Get user info to extract company ID
+        const userInfo = await whopClient.users.retrieve('me', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
 
-        console.log('[Auth] Authenticated user:', whopUserId, 'Company:', companyId);
+        const companyId = (userInfo as any).company_id || (userInfo as any).companyId;
+
+        if (!companyId) {
+            console.error('[Auth] No company_id found on user');
+            return null;
+        }
+
+        console.log('[Auth] ✅ Authenticated:', whopUserId, 'Company:', companyId);
 
         // Get or create user in database
         let user = await db.query.users.findFirst({
@@ -73,12 +85,11 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
         });
 
         if (!user) {
-            // Create new user
             const [newUser] = await db.insert(users).values({
                 whopUserId: whopUserId,
                 whopCompanyId: companyId,
-                email: null,
-                username: 'User',
+                email: (userInfo as any).email || null,
+                username: (userInfo as any).username || 'User',
                 subscriptionTier: 'free'
             }).returning();
 

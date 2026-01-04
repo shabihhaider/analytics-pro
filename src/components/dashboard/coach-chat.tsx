@@ -39,9 +39,15 @@ export function CoachChat({ contextStats }: CoachChatProps) {
         setLoading(true);
 
         try {
+            const token = (window as any).__WHOP_TOKEN__;
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (token) {
+                headers['x-whop-user-token'] = token;
+            }
+
             const res = await fetch('/api/ai/chat', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify({ message: userMsg, contextStats })
             });
 
