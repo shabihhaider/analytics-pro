@@ -44,13 +44,23 @@ export default function DashboardPage() {
       if (token) headers.set('x-whop-user-token', token);
 
       try {
-        const [engRes, revRes, riskRes, histRes, insightRes] = await Promise.all([
+        const responses = await Promise.all([
           fetch('/api/analytics/engagement', { headers }),
           fetch('/api/analytics/revenue', { headers }),
           fetch('/api/analytics/risk', { headers }),
           fetch('/api/analytics/history', { headers }),
           fetch('/api/analytics/insight', { headers })
         ]);
+
+        // Debug: Check for failures
+        for (const res of responses) {
+          if (!res.ok) {
+            const text = await res.text();
+            console.error(`API Error (${res.url}): ${res.status} ${res.statusText}`, text);
+          }
+        }
+
+        const [engRes, revRes, riskRes, histRes, insightRes] = responses;
 
         if (engRes.ok) setMetrics(await engRes.json());
         if (revRes.ok) setRevenue(await revRes.json());
@@ -65,7 +75,7 @@ export default function DashboardPage() {
         }
 
       } catch (e) {
-        console.error(e);
+        console.error("Fetch Execution Error:", e);
       } finally {
         setLoading(false);
       }
