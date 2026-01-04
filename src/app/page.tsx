@@ -40,7 +40,8 @@ export default function DashboardPage() {
       // Robust Auth: Get token from global window object injected by layout
       // This bypasses cookie blocking in iframes
       const token = (window as any).WHOP_TOKEN;
-      const headers = token ? { 'x-whop-user-token': token } : {};
+      const headers = new Headers();
+      if (token) headers.set('x-whop-user-token', token);
 
       try {
         const [engRes, revRes, riskRes, histRes, insightRes] = await Promise.all([
@@ -90,7 +91,8 @@ export default function DashboardPage() {
             const toastId = toast.loading("Syncing latest data...");
             try {
               const token = (window as any).WHOP_TOKEN;
-              const headers = token ? { 'x-whop-user-token': token } : {};
+              const headers = new Headers();
+              if (token) headers.set('x-whop-user-token', token);
               await fetch('/api/sync', { method: 'POST', headers });
               toast.success("Sync complete!", { id: toastId });
               window.location.reload();
