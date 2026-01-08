@@ -43,18 +43,28 @@ export default function DashboardPage() {
       // Debug: Log token state (check browser console)
       console.log('[Page] Token from window:', token ? `Present (${token.substring(0, 20)}...)` : 'MISSING/EMPTY');
 
-      const headers: Record<string, string> = {};
+      // Extract companyId from JWT for multi-tenancy
+      let companyId = '';
       if (token) {
-        headers['x-whop-user-token'] = token;
+        try {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          companyId = payload.company_id || payload.companyId || payload.aud || '';
+          console.log('[Page] Company ID:', companyId);
+        } catch (e) {
+          console.error('[Page] Failed to decode JWT:', e);
+        }
       }
+
+      // Build query string with companyId for multi-tenancy
+      const queryParams = companyId ? `?companyId=${encodeURIComponent(companyId)}` : '';
 
       try {
         const responses = await Promise.all([
-          fetch('/api/analytics/engagement', { headers }),
-          fetch('/api/analytics/revenue', { headers }),
-          fetch('/api/analytics/risk', { headers }),
-          fetch('/api/analytics/history', { headers }),
-          fetch('/api/analytics/insight', { headers })
+          fetch(`/api/analytics/engagement${queryParams}`),
+          fetch(`/api/analytics/revenue${queryParams}`),
+          fetch(`/api/analytics/risk${queryParams}`),
+          fetch(`/api/analytics/history${queryParams}`),
+          fetch(`/api/analytics/insight${queryParams}`)
         ]);
 
         // Debug: Check for failures
@@ -106,12 +116,18 @@ export default function DashboardPage() {
             const toastId = toast.loading("Syncing latest data...");
             try {
               const token = (window as any).__WHOP_TOKEN__;
-              const headers: Record<string, string> = {};
+
+              // Extract companyId for multi-tenancy
+              let companyId = '';
               if (token) {
-                headers['x-whop-user-token'] = token;
+                try {
+                  const payload = JSON.parse(atob(token.split('.')[1]));
+                  companyId = payload.company_id || payload.companyId || payload.aud || '';
+                } catch (e) { }
               }
 
-              await fetch('/api/sync', { method: 'POST', headers });
+              const queryParams = companyId ? `?companyId=${encodeURIComponent(companyId)}` : '';
+              await fetch(`/api/sync${queryParams}`, { method: 'POST' });
               toast.success("Sync complete!", { id: toastId });
               window.location.reload();
             } catch (e) {

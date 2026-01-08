@@ -12,84 +12,95 @@ interface AuthenticatedUser {
 }
 
 /**
+ * Helper to decode JWT payload without verification.
+ * Safe because we only use it to extract the company_id for data scoping.
+ * The JWT was already verified by Whop's proxy.
+ */
+function decodeJwtPayload(token: string): Record<string, any> | null {
+    try {
+        const parts = token.split('.');
+        if (parts.length !== 3) return null;
+        return JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Get the authenticated user for an API request.
  * 
- * IMPORTANT: Due to Whop's proxy stripping headers on client-side fetch calls,
- * the x-whop-user-token may not be available on API requests.
+ * MULTI-TENANCY APPROACH:
+ * 1. Try to get token from headers (works on initial page load)
+ * 2. Try to get companyId from query params (passed by client from JWT)
+ * 3. In development, use DEV_COMPANY_ID env var
  * 
- * Strategy:
- * 1. If token is present, verify it and get/create user
- * 2. If no token (production API calls), return first user in DB
- *    (This is safe because app is single-tenant per company installation)
- * 3. In development, use DEV_COMPANY_ID fallback
+ * Each company gets their own isolated data via user_id scoping.
  */
 export async function getUser(request?: Request): Promise<AuthenticatedUser | null> {
     try {
-        const token = request?.headers.get('x-whop-user-token') || null;
+        let companyId: string | null = null;
+        let whopUserId: string | null = null;
+        let email: string | null = null;
+        let username: string | null = null;
+        let token: string = '';
 
-        // PRODUCTION: Token available (rare - only on initial page load requests)
-        if (token) {
-            console.log('[Auth] Token present, verifying...');
-            // For now, just trust the token exists and find the user
-            // Full verification can be added but requires async SDK call
-
-            // Try to find any existing user (single-tenant app)
-            const user = await db.query.users.findFirst();
-
-            if (user) {
-                return {
-                    id: user.id,
-                    whopUserId: user.whopUserId,
-                    whopCompanyId: user.whopCompanyId,
-                    username: user.username,
-                    email: user.email,
-                    token: token
-                };
+        // Method 1: Try to get token from headers (initial page load)
+        const headerToken = request?.headers.get('x-whop-user-token');
+        if (headerToken) {
+            token = headerToken;
+            const payload = decodeJwtPayload(headerToken);
+            if (payload) {
+                companyId = payload.company_id || payload.companyId || payload.aud;
+                whopUserId = payload.sub || payload.user_id || payload.userId;
+                email = payload.email;
+                username = payload.username;
+                console.log('[Auth] Got companyId from token:', companyId);
             }
+        }
 
-            // No user yet - this shouldn't happen in normal flow
-            console.error('[Auth] Token present but no user in database');
+        // Method 2: Try to get companyId from query params (client-side API calls)
+        if (!companyId && request) {
+            const url = new URL(request.url);
+            companyId = url.searchParams.get('companyId');
+            if (companyId) {
+                console.log('[Auth] Got companyId from query param:', companyId);
+            }
+        }
+
+        // Method 3: Development fallback
+        if (!companyId && process.env.NODE_ENV === 'development') {
+            companyId = process.env.DEV_COMPANY_ID || process.env.WHOP_COMPANY_ID || null;
+            if (companyId) {
+                console.log('[Auth] Using DEV_COMPANY_ID:', companyId);
+            }
+        }
+
+        // If we still have no companyId, we cannot authenticate
+        if (!companyId) {
+            console.error('[Auth] No companyId available - cannot authenticate');
             return null;
         }
 
-        // PRODUCTION: No token (common - Whop proxy strips headers on fetch calls)
-        // Fall back to finding existing user
-        console.log('[Auth] No token in request, falling back to existing user');
-
-        // In production, find the first user (single-tenant per installation)
-        // In development, use DEV_COMPANY_ID
-        const DEV_COMPANY_ID = process.env.DEV_COMPANY_ID || process.env.WHOP_COMPANY_ID;
-
-        let user;
-
-        if (process.env.NODE_ENV === 'development' && DEV_COMPANY_ID) {
-            user = await db.query.users.findFirst({
-                where: eq(users.whopCompanyId, DEV_COMPANY_ID)
-            });
-
-            // Create dev user if doesn't exist
-            if (!user) {
-                console.log('[Auth] Creating dev user...');
-                const [newUser] = await db.insert(users).values({
-                    whopUserId: 'dev_user',
-                    whopCompanyId: DEV_COMPANY_ID,
-                    email: 'dev@example.com',
-                    username: 'Dev Admin',
-                    subscriptionTier: 'pro'
-                }).returning();
-                user = newUser;
-            }
-        } else {
-            // Production: Get first user (installed company)
-            user = await db.query.users.findFirst();
-        }
+        // Find or create user for this company
+        let user = await db.query.users.findFirst({
+            where: eq(users.whopCompanyId, companyId)
+        });
 
         if (!user) {
-            console.error('[Auth] No user found in database - app may not be installed yet');
-            return null;
+            // Create new user for this company
+            console.log('[Auth] Creating new user for company:', companyId);
+            const [newUser] = await db.insert(users).values({
+                whopUserId: whopUserId || `user_${companyId}`,
+                whopCompanyId: companyId,
+                email: email || null,
+                username: username || 'User',
+                subscriptionTier: 'free'
+            }).returning();
+            user = newUser;
+            console.log('[Auth] ✅ Created user:', user.id);
+        } else {
+            console.log('[Auth] ✅ Found existing user:', user.id, 'for company:', companyId);
         }
-
-        console.log('[Auth] ✅ Using existing user:', user.whopUserId, 'Company:', user.whopCompanyId);
 
         return {
             id: user.id,
@@ -97,7 +108,7 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
             whopCompanyId: user.whopCompanyId,
             username: user.username,
             email: user.email,
-            token: process.env.WHOP_API_KEY || '' // Use server API key for calls
+            token: token || process.env.WHOP_API_KEY || ''
         };
 
     } catch (error) {

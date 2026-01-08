@@ -40,14 +40,21 @@ export function CoachChat({ contextStats }: CoachChatProps) {
 
         try {
             const token = (window as any).__WHOP_TOKEN__;
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+
+            // Extract companyId for multi-tenancy
+            let companyId = '';
             if (token) {
-                headers['x-whop-user-token'] = token;
+                try {
+                    const payload = JSON.parse(atob(token.split('.')[1]));
+                    companyId = payload.company_id || payload.companyId || payload.aud || '';
+                } catch (e) { }
             }
 
-            const res = await fetch('/api/ai/chat', {
+            const queryParams = companyId ? `?companyId=${encodeURIComponent(companyId)}` : '';
+
+            const res = await fetch(`/api/ai/chat${queryParams}`, {
                 method: 'POST',
-                headers,
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: userMsg, contextStats })
             });
 
