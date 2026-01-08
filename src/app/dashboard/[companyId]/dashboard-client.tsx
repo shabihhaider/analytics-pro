@@ -1,0 +1,258 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { Activity, Users, RefreshCw, DollarSign, AlertTriangle } from 'lucide-react';
+import { MetricCard } from '@/components/dashboard/metric-card';
+import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { RevenueChart } from "@/components/dashboard/revenue-chart";
+import { InsightCard } from "@/components/dashboard/insight-card";
+import { CoachChat } from "@/components/dashboard/coach-chat";
+
+interface DashboardClientProps {
+    companyId: string;
+}
+
+export default function DashboardClient({ companyId }: DashboardClientProps) {
+    const [metrics, setMetrics] = useState<any>(null);
+    const [revenue, setRevenue] = useState<any>(null);
+    const [risk, setRisk] = useState<any>(null);
+    const [history, setHistory] = useState<any>([]);
+    const [insight, setInsight] = useState<string>("");
+    const [loading, setLoading] = useState(true);
+    const [syncing, setSyncing] = useState(false);
+
+    useEffect(() => {
+        async function fetchData() {
+            // Use companyId passed from URL (server side)
+            console.log('[Dashboard] Using companyId from URL:', companyId);
+
+            // Build query string with companyId for multi-tenancy
+            const queryParams = `?companyId=${encodeURIComponent(companyId)}`;
+
+            try {
+                const responses = await Promise.all([
+                    fetch(`/api/analytics/engagement${queryParams}`),
+                    fetch(`/api/analytics/revenue${queryParams}`),
+                    fetch(`/api/analytics/risk${queryParams}`),
+                    fetch(`/api/analytics/history${queryParams}`),
+                    fetch(`/api/analytics/insight${queryParams}`)
+                ]);
+
+                // Debug: Check for failures
+                for (const res of responses) {
+                    if (!res.ok) {
+                        const text = await res.text();
+                        console.error(`API Error (${res.url}): ${res.status} ${res.statusText}`, text);
+                    }
+                }
+
+                const [engRes, revRes, riskRes, histRes, insightRes] = responses;
+
+                if (engRes.ok) setMetrics(await engRes.json());
+                if (revRes.ok) setRevenue(await revRes.json());
+                if (riskRes.ok) setRisk(await riskRes.json());
+                if (histRes.ok) {
+                    const hData = await histRes.json();
+                    setHistory(hData.history || []);
+                }
+                if (insightRes.ok) {
+                    const iData = await insightRes.json();
+                    setInsight(iData.insight || "");
+                }
+
+            } catch (e) {
+                console.error("Fetch Execution Error:", e);
+            } finally {
+                setLoading(false);
+            }
+        }
+        fetchData();
+    }, [companyId]);
+
+    const handleSync = async () => {
+        if (syncing) return;
+        setSyncing(true);
+        const toastId = toast.loading("Syncing latest data from Whop...");
+        try {
+            const queryParams = `?companyId=${encodeURIComponent(companyId)}`;
+            const response = await fetch(`/api/sync${queryParams}`, { method: 'POST' });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.details || errorData.error || 'Sync failed');
+            }
+
+            toast.success("Sync complete! Refreshing...", { id: toastId });
+            setTimeout(() => window.location.reload(), 500);
+        } catch (e) {
+            console.error('[Sync] Error:', e);
+            toast.error(e instanceof Error ? e.message : "Sync failed - check console", { id: toastId });
+            setSyncing(false);
+        }
+    };
+
+    return (
+        <div className="p-8 space-y-8 min-h-screen bg-[#0a0a0a] text-white font-sans selection:bg-purple-500/30">
+            {/* Header */}
+            <div className="flex justify-between items-center animate-in fade-in slide-in-from-top-4 duration-700">
+                <div>
+                    <h1 className="text-4xl font-extrabold tracking-tight bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent">
+                        Analytics Pro
+                    </h1>
+                    <p className="text-gray-400 mt-2 text-lg">Real-time engagement & revenue insights</p>
+                </div>
+
+                <Button
+                    variant="outline"
+                    className="bg-white/5 border-white/10 hover:bg-white/10 text-white hover:text-white backdrop-blur-md transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+                    disabled={syncing}
+                    onClick={handleSync}
+                >
+                    <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+                    {syncing ? 'Syncing...' : 'Sync Data'}
+                </Button>
+            </div>
+
+            {/* AI Insight */}
+            <div className="animate-in fade-in slide-in-from-top-8 duration-700 delay-100">
+                <InsightCard insight={insight} loading={loading} />
+            </div>
+
+            <CoachChat contextStats={{
+                mrr: revenue?.mrr?.usd || 0,
+                activeMembers: revenue?.activeMembers || 0,
+                highRiskCount: risk?.riskList?.filter((r: any) => r.riskLevel === 'high').length || 0
+            }} />
+
+            {/* Metrics Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100">
+                <MetricCard
+                    title="Engagement Score"
+                    value={metrics?.stats?.averageScore ? `${metrics.stats.averageScore}%` : '0%'}
+                    icon={<Activity className="h-5 w-5 text-purple-400" />}
+                    trend="+2.5%"
+                />
+                <MetricCard
+                    title="Active Members"
+                    value={revenue?.activeMembers?.toString() || '0'}
+                    icon={<Users className="h-5 w-5 text-blue-400" />}
+                    trend="+12"
+                />
+                <MetricCard
+                    title="Monthly Revenue (MRR)"
+                    value={`$${(revenue?.mrr?.usd || 0).toLocaleString()}`}
+                    icon={<DollarSign className="h-5 w-5 text-green-400" />}
+                    trend="+8.2%"
+                />
+                <MetricCard
+                    title="High Risk Members"
+                    value={risk?.riskList?.filter((r: any) => r.riskLevel === 'high').length.toString() || '0'}
+                    icon={<AlertTriangle className="h-5 w-5 text-red-400" />}
+                    trend="Action Needed"
+                    trendUp={false}
+                />
+            </div>
+
+            {/* Charts Section */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-12 duration-700 delay-200">
+                {/* Revenue Chart (Takes up 2 columns) */}
+                <RevenueChart data={history} />
+
+                {/* Top Engaged Sidebar */}
+                <Card className="bg-black/40 border-white/10 backdrop-blur-xl shadow-2xl">
+                    <CardHeader>
+                        <CardTitle className="text-white">Top Engaged</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="space-y-4">
+                            {metrics?.leaderboard?.map((member: any, i: number) => (
+                                <div key={i} className="flex items-center justify-between border-b border-white/5 pb-2 last:border-0 last:pb-0">
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/20 text-xs font-bold text-blue-500">
+                                            {i + 1}
+                                        </div>
+                                        <div>
+                                            <p className="font-medium text-sm text-gray-200">{member.username || 'Unknown'}</p>
+                                            <p className="text-xs text-muted-foreground">{member.messages} msgs</p>
+                                        </div>
+                                    </div>
+                                    <div className="text-right">
+                                        <span className="block font-bold text-green-400 text-sm">{Number(member.score).toFixed(0)}</span>
+                                    </div>
+                                </div>
+                            ))}
+                            {(!metrics?.leaderboard || metrics.leaderboard.length === 0) && (
+                                <p className="text-sm text-gray-500 text-center py-4">No data yet</p>
+                            )}
+                        </div>
+                    </CardContent>
+                </Card>
+            </div>
+
+            {/* Churn Risk Radar */}
+            <Card className="bg-black/40 border-white/10 backdrop-blur-xl shadow-2xl animate-in fade-in slide-in-from-bottom-16 duration-700 delay-300">
+                <CardHeader>
+                    <CardTitle className="text-xl font-bold flex items-center gap-2 text-white">
+                        <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                        Churn Risk Radar
+                    </CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <div className="rounded-md border border-white/5 overflow-hidden">
+                        <Table>
+                            <TableHeader className="bg-white/5">
+                                <TableRow className="hover:bg-transparent border-white/5">
+                                    <TableHead className="text-gray-400">Member</TableHead>
+                                    <TableHead className="text-gray-400">Risk Level</TableHead>
+                                    <TableHead className="text-gray-400">Days Inactive</TableHead>
+                                    <TableHead className="text-gray-400">Value (MRR)</TableHead>
+                                    <TableHead className="text-right text-gray-400">Action</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {risk?.riskList?.map((member: any) => (
+                                    <TableRow key={member.memberId} className="hover:bg-white/5 border-white/5 transition-colors">
+                                        <TableCell className="font-medium text-gray-200">
+                                            {member.username}
+                                        </TableCell>
+                                        <TableCell>
+                                            <Badge variant="destructive" className="bg-red-500/20 text-red-400 hover:bg-red-500/30 border-red-500/50">
+                                                HIGH
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell className="text-gray-400">{member.daysInactive} days</TableCell>
+                                        <TableCell className="text-green-400 font-mono">
+                                            ${member.renewalPrice} <span className="text-xs text-gray-500">{member.currency}</span>
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                className="h-8 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10"
+                                                onClick={() => window.location.href = `mailto:${member.email}?subject=Risk Alert: Staying Active in the Community`}
+                                            >
+                                                Contact
+                                            </Button>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                                {(!risk?.riskList || risk.riskList.length === 0) && (
+                                    <TableRow>
+                                        <TableCell colSpan={5} className="text-center py-8 text-gray-500">
+                                            No high-risk members detected based on current activity.
+                                        </TableCell>
+                                    </TableRow>
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
+                </CardContent>
+            </Card>
+
+        </div>
+    );
+}
