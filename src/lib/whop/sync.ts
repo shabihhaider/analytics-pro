@@ -55,6 +55,8 @@ export class WhopSync {
                         queryParams.company_id = this.companyId;
                     }
 
+                    console.log(`[Sync] API call with params:`, JSON.stringify(queryParams));
+
                     const response: any = await whop.memberships.list(queryParams);
 
                     if (!response.data || response.data.length === 0) {
