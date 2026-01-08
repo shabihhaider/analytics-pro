@@ -17,12 +17,19 @@ export async function POST(req: Request) {
             );
         }
 
-        console.log(`[API] Starting sync for company: ${user.whopCompanyId}`);
+        // Get companyId from query params (this is the CORRECT biz_ ID from URL)
+        // Fall back to user's stored companyId only if query param is empty
+        const url = new URL(req.url);
+        const queryCompanyId = url.searchParams.get('companyId');
+        const companyIdToUse = (queryCompanyId && queryCompanyId.startsWith('biz_'))
+            ? queryCompanyId
+            : user.whopCompanyId;
 
-        // Create sync instance for THIS user's company
-        // NOT a hardcoded company!
+        console.log(`[API] Sync - Query companyId: ${queryCompanyId}, User stored: ${user.whopCompanyId}, Using: ${companyIdToUse}`);
+
+        // Create sync instance with the CORRECT company ID from URL
         const syncer = new WhopSync(
-            user.whopCompanyId, // ← Dynamic! Changes based on who's logged in
+            companyIdToUse,
             user.id,
             user.token
         );
@@ -33,7 +40,7 @@ export async function POST(req: Request) {
 
         return NextResponse.json({
             success: true,
-            message: `Sync complete for company ${user.whopCompanyId}`
+            message: `Sync complete for company ${companyIdToUse}`
         });
 
     } catch (error) {
