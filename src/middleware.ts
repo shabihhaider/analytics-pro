@@ -29,12 +29,21 @@ export async function middleware(request: NextRequest) {
 
     // Production: API routes MUST have token
     if (!token) {
-        console.error('[Middleware] API request missing x-whop-user-token header');
+        // Debug: Log all headers received to help diagnose
+        const allHeaders: Record<string, string> = {};
+        request.headers.forEach((value, key) => {
+            allHeaders[key] = key.toLowerCase().includes('token') ? value.substring(0, 20) + '...' : '[hidden]';
+        });
+        console.error('[Middleware] 401 - No token found. Headers:', JSON.stringify(allHeaders));
+
         return NextResponse.json(
             { error: 'Unauthorized: Missing authentication token' },
             { status: 401 }
         );
     }
+
+    // Debug: Log successful token receipt
+    console.log('[Middleware] Token received:', token.substring(0, 20) + '...');
 
     // Forward the token in headers for getUser() to access
     const requestHeaders = new Headers(request.headers);

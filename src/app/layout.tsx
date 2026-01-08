@@ -4,6 +4,9 @@ import "./globals.css";
 
 import { headers } from 'next/headers';
 
+// CRITICAL: Force dynamic rendering to ensure headers() reads fresh request headers
+export const dynamic = 'force-dynamic';
+
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
@@ -20,6 +23,9 @@ export default function RootLayout({
   // Whop sends it in x-whop-user-token header when app loads in iframe
   const headersList = headers();
   const token = headersList.get('x-whop-user-token') || '';
+
+  // Debug: Log token presence (check Vercel Function Logs)
+  console.log('[Layout] Token captured:', token ? `YES (${token.substring(0, 20)}...)` : 'NO/EMPTY');
 
   return (
     <html lang="en">

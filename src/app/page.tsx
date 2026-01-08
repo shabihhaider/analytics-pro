@@ -40,6 +40,9 @@ export default function DashboardPage() {
       // Get token that was injected by server
       const token = (window as any).__WHOP_TOKEN__;
 
+      // Debug: Log token state (check browser console)
+      console.log('[Page] Token from window:', token ? `Present (${token.substring(0, 20)}...)` : 'MISSING/EMPTY');
+
       const headers: Record<string, string> = {};
       if (token) {
         headers['x-whop-user-token'] = token;
