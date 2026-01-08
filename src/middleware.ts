@@ -1,62 +1,56 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
+/**
+ * IMPORTANT: Whop's Cloudflare proxy strips custom headers on client-side fetch calls.
+ * The x-whop-user-token is ONLY available on the initial HTML page load.
+ * 
+ * Authentication Strategy:
+ * 1. Layout.tsx captures token on initial load → injects to window.__WHOP_TOKEN__
+ * 2. API routes receive token via cookie OR from client headers (if not stripped)
+ * 3. If no token available, API routes use WHOP_API_KEY for server-to-server calls
+ * 
+ * This middleware is now simplified to:
+ * - Skip static assets and webhooks
+ * - Forward any available token
+ * - NOT block requests that lack a token (auth handled in route handlers)
+ */
 export async function middleware(request: NextRequest) {
     const pathname = request.nextUrl.pathname;
 
-    // Skip authentication for:
-    // 1. Static assets
-    // 2. Webhooks (they have their own signature verification)
-    // 3. NON-API routes (let the page load so iframe can render)
+    // Skip static assets and webhooks
     if (
         pathname.startsWith('/_next') ||
         pathname.startsWith('/static') ||
         pathname.startsWith('/api/webhooks') ||
-        pathname === '/favicon.ico' ||
-        !pathname.startsWith('/api') // ← KEY: Don't block page loads
+        pathname === '/favicon.ico'
     ) {
         return NextResponse.next();
     }
 
-    // Extract token from request
-    let token: string | null = request.headers.get('x-whop-user-token');
+    // For API routes: Check for token but DON'T block if missing
+    // The route handlers will use WHOP_API_KEY as fallback
+    if (pathname.startsWith('/api')) {
+        const token = request.headers.get('x-whop-user-token');
 
-    // Development mode: allow through without token
-    if (!token && process.env.NODE_ENV === 'development') {
-        console.log('[Middleware] Dev mode: Allowing API request without token');
-        return NextResponse.next();
+        if (token) {
+            console.log('[Middleware] Token found, forwarding...');
+            const requestHeaders = new Headers(request.headers);
+            requestHeaders.set('x-whop-user-token', token);
+
+            return NextResponse.next({
+                request: { headers: requestHeaders }
+            });
+        } else {
+            // No token - let route handler use server API key
+            console.log('[Middleware] No token in headers, allowing request (route will use API key)');
+            return NextResponse.next();
+        }
     }
 
-    // Production: API routes MUST have token
-    if (!token) {
-        // Debug: Log all headers received to help diagnose
-        const allHeaders: Record<string, string> = {};
-        request.headers.forEach((value, key) => {
-            allHeaders[key] = key.toLowerCase().includes('token') ? value.substring(0, 20) + '...' : '[hidden]';
-        });
-        console.error('[Middleware] 401 - No token found. Headers:', JSON.stringify(allHeaders));
-
-        return NextResponse.json(
-            { error: 'Unauthorized: Missing authentication token' },
-            { status: 401 }
-        );
-    }
-
-    // Debug: Log successful token receipt
-    console.log('[Middleware] Token received:', token.substring(0, 20) + '...');
-
-    // Forward the token in headers for getUser() to access
-    const requestHeaders = new Headers(request.headers);
-    requestHeaders.set('x-whop-user-token', token);
-
-    return NextResponse.next({
-        request: {
-            headers: requestHeaders,
-        },
-    });
+    return NextResponse.next();
 }
 
 export const config = {
-    // Only match API routes (not page loads)
-    matcher: '/api/:path*',
+    matcher: ['/api/:path*', '/((?!_next/static|_next/image|favicon.ico).*)'],
 };
