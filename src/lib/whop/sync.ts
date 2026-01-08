@@ -35,35 +35,56 @@ export class WhopSync {
             let cursor: string | undefined;
             let hasMore = true;
 
+            // Determine if companyId is a valid business ID (starts with biz_)
+            // If it's an app ID (app_xxx), we need to fetch without company filter
+            const isValidCompanyId = this.companyId && this.companyId.startsWith('biz_');
+
+            console.log(`[Sync] Company ID format check: ${this.companyId} (valid biz_: ${isValidCompanyId})`);
+
             while (hasMore) {
-                console.log(`[Sync] Fetching page with cursor: ${cursor || 'initial'} for company ${this.companyId}...`);
+                console.log(`[Sync] Fetching page with cursor: ${cursor || 'initial'}...`);
 
-                const response: any = await whop.memberships.list({
-                    company_id: this.companyId,
-                    limit: 100,
-                    cursor: cursor
-                } as any);
+                try {
+                    // Build query params - only include company_id if valid
+                    const queryParams: any = {
+                        limit: 100,
+                        cursor: cursor
+                    };
 
-                if (!response.data || response.data.length === 0) {
-                    hasMore = false;
-                    break;
-                }
+                    if (isValidCompanyId) {
+                        queryParams.company_id = this.companyId;
+                    }
 
-                allMemberships.push(...response.data);
-                console.log(`[Sync] Fetched ${response.data.length} memberships`);
+                    const response: any = await whop.memberships.list(queryParams);
 
-                if (response.pagination?.next_page) {
-                    cursor = response.pagination.next_page;
-                    // Protect against infinite loop if cursor doesn't change
-                    if (!cursor) hasMore = false;
-                } else if (response.meta?.next_cursor) {
-                    cursor = response.meta.next_cursor;
-                } else {
-                    hasMore = false;
-                }
+                    if (!response.data || response.data.length === 0) {
+                        hasMore = false;
+                        break;
+                    }
 
-                if (hasMore) {
-                    await this.sleep(100);
+                    allMemberships.push(...response.data);
+                    console.log(`[Sync] Fetched ${response.data.length} memberships`);
+
+                    if (response.pagination?.next_page) {
+                        cursor = response.pagination.next_page;
+                        if (!cursor) hasMore = false;
+                    } else if (response.meta?.next_cursor) {
+                        cursor = response.meta.next_cursor;
+                    } else {
+                        hasMore = false;
+                    }
+
+                    if (hasMore) {
+                        await this.sleep(100);
+                    }
+                } catch (fetchError: any) {
+                    console.error('[Sync] Error fetching memberships:', fetchError.message);
+                    // If it fails with company filter, try without
+                    if (isValidCompanyId) {
+                        console.log('[Sync] Retrying without company filter...');
+                        break;
+                    }
+                    throw fetchError;
                 }
             }
 

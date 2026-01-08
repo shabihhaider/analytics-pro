@@ -34,6 +34,7 @@ export default function DashboardPage() {
   const [history, setHistory] = useState<any>([]);
   const [insight, setInsight] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     async function fetchData() {
@@ -111,9 +112,12 @@ export default function DashboardPage() {
 
         <Button
           variant="outline"
-          className="bg-white/5 border-white/10 hover:bg-white/10 text-white hover:text-white backdrop-blur-md transition-all hover:scale-105 active:scale-95"
+          className="bg-white/5 border-white/10 hover:bg-white/10 text-white hover:text-white backdrop-blur-md transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+          disabled={syncing}
           onClick={async () => {
-            const toastId = toast.loading("Syncing latest data...");
+            if (syncing) return;
+            setSyncing(true);
+            const toastId = toast.loading("Syncing latest data from Whop...");
             try {
               const token = (window as any).__WHOP_TOKEN__;
 
@@ -127,16 +131,24 @@ export default function DashboardPage() {
               }
 
               const queryParams = companyId ? `?companyId=${encodeURIComponent(companyId)}` : '';
-              await fetch(`/api/sync${queryParams}`, { method: 'POST' });
-              toast.success("Sync complete!", { id: toastId });
-              window.location.reload();
+              const response = await fetch(`/api/sync${queryParams}`, { method: 'POST' });
+
+              if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.details || errorData.error || 'Sync failed');
+              }
+
+              toast.success("Sync complete! Refreshing...", { id: toastId });
+              setTimeout(() => window.location.reload(), 500);
             } catch (e) {
-              toast.error("Sync failed", { id: toastId });
+              console.error('[Sync] Error:', e);
+              toast.error(e instanceof Error ? e.message : "Sync failed - check console", { id: toastId });
+              setSyncing(false);
             }
           }}
         >
-          <RefreshCw className="mr-2 h-4 w-4" />
-          Sync Data
+          <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+          {syncing ? 'Syncing...' : 'Sync Data'}
         </Button>
       </div>
 
