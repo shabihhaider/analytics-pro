@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 
 import { headers } from 'next/headers';
+import { InitUser } from '@/components/init-user';
 
 // CRITICAL: Force dynamic rendering to ensure headers() reads fresh request headers
 export const dynamic = 'force-dynamic';
@@ -38,8 +39,11 @@ export default function RootLayout({
         />
       </head>
       <body className={inter.className}>
+        {/* Initialize user in DB during page load */}
+        <InitUser />
         {children}
       </body>
     </html>
   );
 }
+
