@@ -82,6 +82,42 @@ export const revenueMetrics = pgTable('revenue_metrics', {
   };
 });
 
+// Courses table (Synced from Whop)
+export const courses = pgTable('courses', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  whopCourseId: varchar('whop_course_id', { length: 255 }).notNull(),
+  title: varchar('title', { length: 500 }),
+  description: varchar('description', { length: 2000 }),
+  lessonCount: integer('lesson_count').default(0),
+  isPublished: boolean('is_published').default(true),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => {
+  return {
+    userCourseIdx: index('idx_courses_user_whop').on(table.userId, table.whopCourseId),
+  };
+});
+
+// Course Progress (Per member, per course)
+export const courseProgress = pgTable('course_progress', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  courseId: uuid('course_id').references(() => courses.id, { onDelete: 'cascade' }),
+  memberId: uuid('member_id').references(() => members.id, { onDelete: 'cascade' }),
+  lessonsCompleted: integer('lessons_completed').default(0),
+  totalLessons: integer('total_lessons').default(0),
+  progressPercent: decimal('progress_percent', { precision: 5, scale: 2 }).default('0'),
+  completedAt: timestamp('completed_at'),
+  lastAccessedAt: timestamp('last_accessed_at'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => {
+  return {
+    memberCourseIdx: index('idx_course_progress_member').on(table.memberId, table.courseId),
+  };
+});
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   members: many(members),

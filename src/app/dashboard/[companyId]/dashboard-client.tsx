@@ -12,6 +12,7 @@ import { RevenueChart } from "@/components/dashboard/revenue-chart";
 import { InsightCard } from "@/components/dashboard/insight-card";
 import { CoachChat } from "@/components/dashboard/coach-chat";
 import { ForecastCard } from "@/components/dashboard/forecast-card";
+import { CourseAnalyticsCard } from "@/components/dashboard/course-analytics-card";
 
 interface DashboardClientProps {
     companyId: string;
@@ -24,6 +25,7 @@ export default function DashboardClient({ companyId }: DashboardClientProps) {
     const [history, setHistory] = useState<any>([]);
     const [insight, setInsight] = useState<string>("");
     const [forecast, setForecast] = useState<any>(null);
+    const [courses, setCourses] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [syncing, setSyncing] = useState(false);
 
@@ -42,7 +44,8 @@ export default function DashboardClient({ companyId }: DashboardClientProps) {
                     fetch(`/api/analytics/risk${queryParams}`),
                     fetch(`/api/analytics/history${queryParams}`),
                     fetch(`/api/analytics/insight${queryParams}`),
-                    fetch(`/api/analytics/forecast${queryParams}`)
+                    fetch(`/api/analytics/forecast${queryParams}`),
+                    fetch(`/api/analytics/courses${queryParams}`)
                 ]);
 
                 // Debug: Check for failures
@@ -53,7 +56,7 @@ export default function DashboardClient({ companyId }: DashboardClientProps) {
                     }
                 }
 
-                const [engRes, revRes, riskRes, histRes, insightRes, forecastRes] = responses;
+                const [engRes, revRes, riskRes, histRes, insightRes, forecastRes, coursesRes] = responses;
 
                 if (engRes.ok) setMetrics(await engRes.json());
                 if (revRes.ok) setRevenue(await revRes.json());
@@ -68,6 +71,10 @@ export default function DashboardClient({ companyId }: DashboardClientProps) {
                 }
                 if (forecastRes.ok) {
                     setForecast(await forecastRes.json());
+                }
+                if (coursesRes.ok) {
+                    const cData = await coursesRes.json();
+                    setCourses(cData.courses || []);
                 }
 
             } catch (e) {
@@ -163,9 +170,10 @@ export default function DashboardClient({ companyId }: DashboardClientProps) {
                 />
             </div>
 
-            {/* Forecast Section */}
-            <div className="animate-in fade-in slide-in-from-bottom-10 duration-700 delay-150">
+            {/* Forecast & Courses Section */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in fade-in slide-in-from-bottom-10 duration-700 delay-150">
                 <ForecastCard data={forecast} loading={loading} />
+                <CourseAnalyticsCard courses={courses} loading={loading} />
             </div>
 
             {/* Charts Section */}
