@@ -1,23 +1,24 @@
-
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { members, engagementMetrics } from '@/lib/db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { getUser } from '@/lib/auth/get-user';
+import { getTierLimits } from '@/lib/billing/subscription';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
     try {
-        // ✅ AUTHENTICATE USER FIRST
         const user = await getUser(req);
         if (!user) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        // ✅ FETCH ONLY THIS USER'S MEMBERS
+        // Get tier limits
+        const limits = getTierLimits(user.subscriptionTier);
+
         const allMembers = await db.query.members.findMany({
-            where: eq(members.userId, user.id), // ← SCOPED!
+            where: eq(members.userId, user.id),
             with: {
                 user: true,
             }
@@ -26,10 +27,8 @@ export async function GET(req: Request) {
         const riskList = [];
 
         for (const member of allMembers) {
-            // Only analyze active members
             if (member.status !== 'active') continue;
 
-            // Find latest metric
             const latestMetric = await db.query.engagementMetrics.findFirst({
                 where: eq(engagementMetrics.memberId, member.id),
                 orderBy: [desc(engagementMetrics.date)]
@@ -67,7 +66,19 @@ export async function GET(req: Request) {
             return parseFloat(b.renewalPrice || '0') - parseFloat(a.renewalPrice || '0');
         });
 
-        return NextResponse.json({ riskList });
+        // Apply tier limit
+        const limitedRiskList = riskList.slice(0, limits.riskTableMembers);
+        const isLimited = riskList.length > limits.riskTableMembers;
+
+        return NextResponse.json({
+            riskList: limitedRiskList,
+            totalCount: riskList.length,
+            isLimited,
+            limit: limits.riskTableMembers === Infinity ? null : limits.riskTableMembers,
+            upgradeMessage: isLimited
+                ? `Showing ${limits.riskTableMembers} of ${riskList.length} at-risk members. Upgrade to Pro for unlimited.`
+                : null
+        });
 
     } catch (error) {
         console.error('Error in churn risk:', error);

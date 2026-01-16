@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getUser } from '@/lib/auth/get-user';
 import { getCourseAnalytics, syncCourses } from '@/lib/analytics/courses';
+import { getTierLimits, getUpgradeMessage } from '@/lib/billing/subscription';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,6 +10,18 @@ export async function GET(req: Request) {
         const user = await getUser(req);
         if (!user) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        // Check if user has Pro tier
+        const limits = getTierLimits(user.subscriptionTier);
+        if (!limits.hasCourseAnalytics) {
+            return NextResponse.json({
+                error: 'Upgrade required',
+                upgradeRequired: true,
+                feature: 'courses',
+                message: getUpgradeMessage('courses'),
+                currentTier: user.subscriptionTier || 'free'
+            }, { status: 403 });
         }
 
         // Get course analytics
@@ -31,12 +44,23 @@ export async function GET(req: Request) {
     }
 }
 
-// POST to trigger course sync
+// POST to trigger course sync (also Pro only)
 export async function POST(req: Request) {
     try {
         const user = await getUser(req);
         if (!user) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const limits = getTierLimits(user.subscriptionTier);
+        if (!limits.hasCourseAnalytics) {
+            return NextResponse.json({
+                error: 'Upgrade required',
+                upgradeRequired: true,
+                feature: 'courses',
+                message: getUpgradeMessage('courses'),
+                currentTier: user.subscriptionTier || 'free'
+            }, { status: 403 });
         }
 
         // Sync courses from Whop

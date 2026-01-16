@@ -122,6 +122,55 @@ export async function POST(req: Request) {
                 }
                 break;
 
+            // ==================
+            // BILLING EVENTS (Subscription Tiers)
+            // ==================
+            case 'subscription.purchased':
+            case 'payment.succeeded':
+                // User purchased Pro subscription
+                const purchaseCompanyId = companyId || payload.data?.company_id;
+                const productId = payload.product_id || payload.data?.product_id;
+
+                if (purchaseCompanyId) {
+                    const { db } = await import('@/lib/db');
+                    const { users } = await import('@/lib/db/schema');
+                    const { eq } = await import('drizzle-orm');
+
+                    // Check if this is for our Pro product
+                    const proProductId = process.env.WHOP_PRODUCT_PRO_ID;
+                    if (productId === proProductId || !proProductId) {
+                        // Update user to Pro tier
+                        await db.update(users)
+                            .set({
+                                subscriptionTier: 'pro',
+                                subscriptionStatus: 'active'
+                            })
+                            .where(eq(users.whopCompanyId, purchaseCompanyId));
+                        console.log('[Webhook] Upgraded user to Pro:', purchaseCompanyId);
+                    }
+                }
+                break;
+
+            case 'subscription.cancelled':
+            case 'subscription.expired':
+                // User cancelled - downgrade to free
+                const cancelCompanyId = companyId || payload.data?.company_id;
+
+                if (cancelCompanyId) {
+                    const { db } = await import('@/lib/db');
+                    const { users } = await import('@/lib/db/schema');
+                    const { eq } = await import('drizzle-orm');
+
+                    await db.update(users)
+                        .set({
+                            subscriptionTier: 'free',
+                            subscriptionStatus: 'cancelled'
+                        })
+                        .where(eq(users.whopCompanyId, cancelCompanyId));
+                    console.log('[Webhook] Downgraded user to Free:', cancelCompanyId);
+                }
+                break;
+
             default:
                 console.log(`[Webhook] Unhandled event: ${eventType}`);
         }

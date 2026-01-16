@@ -10,6 +10,7 @@ interface AuthenticatedUser {
     username: string | null;
     email: string | null;
     token: string;
+    subscriptionTier: string | null;
 }
 
 /**
@@ -148,7 +149,8 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
             whopCompanyId: user.whopCompanyId,
             username: user.username,
             email: user.email,
-            token: token || process.env.WHOP_API_KEY || ''
+            token: token || process.env.WHOP_API_KEY || '',
+            subscriptionTier: user.subscriptionTier
         };
 
     } catch (error) {
