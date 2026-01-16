@@ -28,8 +28,7 @@ export async function syncCourses(companyId: string, userId: string): Promise<vo
 
         // Fetch courses from Whop API
         const response = await whopClient.courses.list({
-            company_id: companyId,
-            limit: 50
+            company_id: companyId
         }) as any;
 
         const courseList = response.data || [];
