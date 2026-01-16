@@ -2,14 +2,15 @@ import { db } from '@/lib/db';
 import { users } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { headers } from 'next/headers';
+import { whopClient } from '@/lib/whop/client';
 
 /**
  * Server Component that initializes the user session during page load.
  * 
  * This component:
  * 1. Extracts the x-whop-user-token from headers (available on initial page load)
- * 2. Creates or updates the user in the database
- * 3. This allows subsequent API calls (which don't have the token) to find the user
+ * 2. VERIFIES the token with Whop SDK
+ * 3. Creates or updates the user in the database
  */
 export async function InitUser() {
     try {
@@ -17,41 +18,50 @@ export async function InitUser() {
         const token = headersList.get('x-whop-user-token');
 
         if (!token) {
-            console.log('[InitUser] No token on initial load');
+            return null; // No token on initial load (e.g., direct access)
+        }
+
+        // SECURITY: Verify the token with Whop SDK
+        let verifiedUserId: string | null = null;
+        try {
+            const verified = await whopClient.verifyUserToken(token);
+            verifiedUserId = verified.userId;
+        } catch (verifyError) {
+            console.error('[InitUser] Token verification failed');
             return null;
         }
 
-        console.log('[InitUser] Token present, initializing user...');
-
-        // Decode JWT to extract user info (without verification - Whop already verified)
-        // JWT format: header.payload.signature
+        // Decode JWT to extract additional user info (after verification)
         const parts = token.split('.');
         if (parts.length !== 3) {
-            console.error('[InitUser] Invalid JWT format');
             return null;
         }
 
         const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
-        console.log('[InitUser] JWT payload:', JSON.stringify(payload, null, 2));
 
-        // Extract user info from JWT
-        // Whop JWT typically has: sub (user_id), company_id, etc.
-        const whopUserId = payload.sub || payload.user_id || payload.userId || 'unknown';
-        const companyId = payload.company_id || payload.companyId || payload.aud || process.env.WHOP_COMPANY_ID;
+        // Extract user info from verified JWT
+        const whopUserId = verifiedUserId || payload.sub || payload.user_id || 'unknown';
+        const companyId = payload.company_id || payload.companyId || payload.aud;
 
         if (!companyId) {
-            console.error('[InitUser] No company_id in JWT');
+            console.error('[InitUser] No company_id in verified JWT');
             return null;
         }
 
-        // Check if user exists
+        // Check if user exists by companyId
         let user = await db.query.users.findFirst({
             where: eq(users.whopCompanyId, companyId)
         });
 
         if (!user) {
+            // Try to find by whopUserId
+            user = await db.query.users.findFirst({
+                where: eq(users.whopUserId, whopUserId)
+            });
+        }
+
+        if (!user) {
             // Create new user
-            console.log('[InitUser] Creating new user for company:', companyId);
             const [newUser] = await db.insert(users).values({
                 whopUserId: whopUserId,
                 whopCompanyId: companyId,
@@ -60,14 +70,20 @@ export async function InitUser() {
                 subscriptionTier: 'free'
             }).returning();
             user = newUser;
-            console.log('[InitUser] ✅ Created user:', user.id);
+            console.log('[InitUser] Created user:', user.id);
         } else {
-            console.log('[InitUser] ✅ Found existing user:', user.id);
+            // Update companyId if we have a better one (biz_ vs app_)
+            if (companyId.startsWith('biz_') && !user.whopCompanyId.startsWith('biz_')) {
+                await db.update(users)
+                    .set({ whopCompanyId: companyId, updatedAt: new Date() })
+                    .where(eq(users.id, user.id));
+                console.log('[InitUser] Updated companyId to:', companyId);
+            }
         }
 
         return null; // This is a server component, renders nothing
     } catch (error) {
-        console.error('[InitUser] Error:', error);
+        console.error('[InitUser] Error:', error instanceof Error ? error.message : 'Unknown');
         return null;
     }
 }

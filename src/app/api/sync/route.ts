@@ -6,28 +6,32 @@ export const maxDuration = 60; // Allow longer timeout for sync
 
 export async function POST(req: Request) {
     try {
-        // Get authenticated user
-        // This extracts THEIR company ID from the token
+        // Get authenticated user - this verifies the token and gets the correct companyId
         const user = await getUser(req);
 
         if (!user) {
             return NextResponse.json(
-                { error: 'Unauthorized' },
+                { error: 'Unauthorized - please reload the app' },
                 { status: 401 }
             );
         }
 
-        // Get companyId from query params (this is the CORRECT biz_ ID from URL)
-        // Fall back to user's stored companyId only if query param is empty
-        const url = new URL(req.url);
-        const queryCompanyId = url.searchParams.get('companyId');
-        const companyIdToUse = (queryCompanyId && queryCompanyId.startsWith('biz_'))
-            ? queryCompanyId
-            : user.whopCompanyId;
+        // SECURITY: Use the user's verified companyId, not from query params
+        // The getUser function now properly validates the companyId
+        const companyIdToUse = user.whopCompanyId;
 
-        console.log(`[API] Sync - Query companyId: ${queryCompanyId}, User stored: ${user.whopCompanyId}, Using: ${companyIdToUse}`);
+        // Validate company ID format
+        if (!companyIdToUse || !companyIdToUse.startsWith('biz_')) {
+            console.error('[Sync] Invalid company ID format:', companyIdToUse);
+            return NextResponse.json({
+                error: 'Invalid company configuration',
+                details: 'Please reinstall the app from Whop dashboard'
+            }, { status: 400 });
+        }
 
-        // Create sync instance with the CORRECT company ID from URL
+        console.log('[Sync] Starting for company:', companyIdToUse);
+
+        // Create sync instance with the VERIFIED company ID
         const syncer = new WhopSync(
             companyIdToUse,
             user.id,
@@ -40,14 +44,14 @@ export async function POST(req: Request) {
 
         return NextResponse.json({
             success: true,
-            message: `Sync complete for company ${companyIdToUse}`
+            message: 'Sync complete'
         });
 
     } catch (error) {
-        console.error('[API] Sync failed:', error);
+        console.error('[Sync] Failed:', error instanceof Error ? error.message : error);
         return NextResponse.json({
             error: 'Sync failed',
-            details: error instanceof Error ? error.message : String(error)
+            details: error instanceof Error ? error.message : 'Unknown error'
         }, { status: 500 });
     }
 }

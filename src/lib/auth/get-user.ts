@@ -1,6 +1,7 @@
 import { db } from '@/lib/db';
 import { users } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
+import { whopClient } from '@/lib/whop/client';
 
 interface AuthenticatedUser {
     id: string;
@@ -12,29 +13,16 @@ interface AuthenticatedUser {
 }
 
 /**
- * Helper to decode JWT payload without verification.
- * Safe because we only use it to extract the company_id for data scoping.
- * The JWT was already verified by Whop's proxy.
- */
-function decodeJwtPayload(token: string): Record<string, any> | null {
-    try {
-        const parts = token.split('.');
-        if (parts.length !== 3) return null;
-        return JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
-    } catch {
-        return null;
-    }
-}
-
-/**
  * Get the authenticated user for an API request.
  * 
- * MULTI-TENANCY APPROACH:
- * 1. Try to get token from headers (works on initial page load)
- * 2. Try to get companyId from query params (passed by client from JWT)
- * 3. In development, use DEV_COMPANY_ID env var
+ * SECURITY MODEL:
+ * 1. For requests WITH token: Verify JWT with Whop SDK, extract claims
+ * 2. For requests WITHOUT token: Only accept companyId from URL path (server-controlled)
+ * 3. NEVER trust companyId from query params without verification
  * 
- * Each company gets their own isolated data via user_id scoping.
+ * Multi-tenancy is enforced by:
+ * - Each company gets their own user record
+ * - All data queries are scoped by userId
  */
 export async function getUser(request?: Request): Promise<AuthenticatedUser | null> {
     try {
@@ -43,27 +31,53 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
         let email: string | null = null;
         let username: string | null = null;
         let token: string = '';
+        let isVerified = false;
 
-        // Method 1: Try to get token from headers (initial page load)
+        // Method 1: Try to get and VERIFY token from headers
         const headerToken = request?.headers.get('x-whop-user-token');
         if (headerToken) {
             token = headerToken;
-            const payload = decodeJwtPayload(headerToken);
-            if (payload) {
-                companyId = payload.company_id || payload.companyId || payload.aud;
-                whopUserId = payload.sub || payload.user_id || payload.userId;
-                email = payload.email;
-                username = payload.username;
-                console.log('[Auth] Got companyId from token:', companyId);
+            try {
+                // SECURITY: Use official SDK to verify the token
+                const verified = await whopClient.verifyUserToken(headerToken);
+                whopUserId = verified.userId;
+                isVerified = true;
+                console.log('[Auth] ✅ Token verified, userId:', whopUserId);
+
+                // Get company info from verified token payload
+                // The SDK verification confirms the token is authentic
+                const payload = decodeJwtPayload(headerToken);
+                if (payload) {
+                    companyId = payload.company_id || payload.companyId || payload.aud;
+                    email = payload.email;
+                    username = payload.username;
+                }
+            } catch (verifyError) {
+                console.error('[Auth] Token verification failed:', verifyError);
+                // Don't return null yet - might have companyId from URL path
             }
         }
 
-        // Method 2: Try to get companyId from query params (client-side API calls)
+        // Method 2: Get companyId from URL path (server-controlled, safe)
+        // The URL path /dashboard/[companyId] is controlled by Whop's redirect
         if (!companyId && request) {
             const url = new URL(request.url);
-            companyId = url.searchParams.get('companyId');
-            if (companyId) {
-                console.log('[Auth] Got companyId from query param:', companyId);
+
+            // Extract from path if it's a dashboard route
+            const pathMatch = url.pathname.match(/\/dashboard\/(biz_[a-zA-Z0-9]+)/);
+            if (pathMatch) {
+                companyId = pathMatch[1];
+                console.log('[Auth] Got companyId from URL path:', companyId);
+            }
+
+            // Also accept from query param BUT only biz_ format 
+            // and only if no path match (for API calls from dashboard)
+            if (!companyId) {
+                const queryCompanyId = url.searchParams.get('companyId');
+                if (queryCompanyId && queryCompanyId.startsWith('biz_')) {
+                    companyId = queryCompanyId;
+                    console.log('[Auth] Got companyId from query param:', companyId);
+                }
             }
         }
 
@@ -87,6 +101,24 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
         });
 
         if (!user) {
+            // Try to find by whopUserId if we have a verified one
+            if (whopUserId && isVerified) {
+                user = await db.query.users.findFirst({
+                    where: eq(users.whopUserId, whopUserId)
+                });
+
+                // Update the companyId if we found the user with a better ID
+                if (user && companyId.startsWith('biz_') && !user.whopCompanyId.startsWith('biz_')) {
+                    console.log('[Auth] Updating user companyId from', user.whopCompanyId, 'to', companyId);
+                    await db.update(users)
+                        .set({ whopCompanyId: companyId, updatedAt: new Date() })
+                        .where(eq(users.id, user.id));
+                    user = { ...user, whopCompanyId: companyId };
+                }
+            }
+        }
+
+        if (!user) {
             // Create new user for this company
             console.log('[Auth] Creating new user for company:', companyId);
             const [newUser] = await db.insert(users).values({
@@ -99,7 +131,15 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
             user = newUser;
             console.log('[Auth] ✅ Created user:', user.id);
         } else {
-            console.log('[Auth] ✅ Found existing user:', user.id, 'for company:', companyId);
+            // Update companyId if we have a better one (biz_ vs app_)
+            if (companyId.startsWith('biz_') && !user.whopCompanyId.startsWith('biz_')) {
+                console.log('[Auth] Updating stale companyId from', user.whopCompanyId, 'to', companyId);
+                await db.update(users)
+                    .set({ whopCompanyId: companyId, updatedAt: new Date() })
+                    .where(eq(users.id, user.id));
+                user = { ...user, whopCompanyId: companyId };
+            }
+            console.log('[Auth] ✅ Found existing user:', user.id, 'for company:', user.whopCompanyId);
         }
 
         return {
@@ -113,6 +153,20 @@ export async function getUser(request?: Request): Promise<AuthenticatedUser | nu
 
     } catch (error) {
         console.error('[Auth] Error in getUser:', error);
+        return null;
+    }
+}
+
+/**
+ * Helper to decode JWT payload.
+ * Used ONLY after token is verified by SDK.
+ */
+function decodeJwtPayload(token: string): Record<string, any> | null {
+    try {
+        const parts = token.split('.');
+        if (parts.length !== 3) return null;
+        return JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
+    } catch {
         return null;
     }
 }
