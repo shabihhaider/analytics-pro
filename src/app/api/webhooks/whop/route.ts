@@ -2,6 +2,7 @@ import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { Whop } from '@whop/sdk';
 import { WhopSync } from '@/lib/whop/sync';
+import { trackMessageEvent, trackActivityEvent } from '@/lib/analytics/engagement';
 
 export async function POST(req: Request) {
     try {
@@ -17,26 +18,24 @@ export async function POST(req: Request) {
         const whop = new Whop({ apiKey: process.env.WHOP_API_KEY });
 
         // Verify Signature and Parse
-        // unwrap() throws if signature is invalid
         const payload = whop.webhooks.unwrap(body, {
             headers: Object.fromEntries(headersList.entries()),
             key: webhookKey
         }) as any;
 
-        // The payload handles parsing.
-        // Spec mentions 'action', types mention 'type'. We check both.
         const eventType = payload.type || payload.action;
+        const companyId = payload.company_id || payload.data?.company_id;
 
-        console.log(`Received webhook: ${eventType}`, payload.data || payload);
+        console.log(`[Webhook] Received: ${eventType}`);
 
         switch (eventType) {
+            // ==================
+            // MEMBERSHIP EVENTS
+            // ==================
             case 'membership.went_valid':
             case 'membership.activated':
             case 'membership.went_invalid':
             case 'membership.deactivated':
-                // For critical membership changes, run a full sync to be safe
-                // Logic: Find the company owner/admin to attach the sync to
-                const companyId = payload.company_id || (payload.data && payload.data.company_id);
                 if (companyId) {
                     const { db } = await import('@/lib/db');
                     const { users } = await import('@/lib/db/schema');
@@ -49,49 +48,87 @@ export async function POST(req: Request) {
                     if (adminUser) {
                         const sync = new WhopSync(companyId, adminUser.id);
                         await sync.syncCompanyMembers();
-                        console.log('Webhook: Triggered full member sync for company', companyId);
-                    } else {
-                        console.warn('Webhook: Could not find admin user for company', companyId);
+                        console.log('[Webhook] Synced members for company:', companyId);
                     }
                 }
                 break;
 
+            // ==================
+            // PAYMENT EVENTS
+            // ==================
             case 'payment.succeeded':
-                // handle revenue update
-                const pCompanyId = payload.company_id || (payload.data && payload.data.company_id);
-                if (pCompanyId) {
+                if (companyId) {
                     const { db } = await import('@/lib/db');
                     const { users } = await import('@/lib/db/schema');
                     const { eq } = await import('drizzle-orm');
 
                     const adminUser = await db.query.users.findFirst({
-                        where: eq(users.whopCompanyId, pCompanyId)
+                        where: eq(users.whopCompanyId, companyId)
                     });
 
                     if (adminUser) {
-                        const revSync = new WhopSync(pCompanyId, adminUser.id);
-                        await revSync.syncCompanyMembers(); // Revenue is calculated from members
+                        const revSync = new WhopSync(companyId, adminUser.id);
+                        await revSync.syncCompanyMembers();
+                        console.log('[Webhook] Payment processed, synced for:', companyId);
                     }
                 }
                 break;
 
+            // ==================
+            // ENGAGEMENT EVENTS (NEW!)
+            // ==================
             case 'message.sent':
-                // For high frequency events, we might want to debounce or queue
-                // For MVP, we'll just log or run a light sync if needed
-                console.log('Webhook: Message received (skipping full sync to avoid rate limits)');
+            case 'message.created':
+                // Track message for engagement score
+                const messageData = payload.data || payload;
+                const messageMemberId = messageData.user_id || messageData.member_id;
+
+                if (companyId && messageMemberId) {
+                    const { db } = await import('@/lib/db');
+                    const { users } = await import('@/lib/db/schema');
+                    const { eq } = await import('drizzle-orm');
+
+                    const adminUser = await db.query.users.findFirst({
+                        where: eq(users.whopCompanyId, companyId)
+                    });
+
+                    if (adminUser) {
+                        await trackMessageEvent(companyId, messageMemberId, adminUser.id);
+                        console.log('[Webhook] Tracked message event for:', messageMemberId);
+                    }
+                }
                 break;
 
             case 'course.progress':
-            case 'order.created':
-                console.log(`Webhook: Received ${eventType} (logic pending)`);
+            case 'course.completed':
+            case 'course_lesson.completed':
+                // Track course activity
+                const courseData = payload.data || payload;
+                const courseMemberId = courseData.user_id || courseData.member_id;
+
+                if (companyId && courseMemberId) {
+                    const { db } = await import('@/lib/db');
+                    const { users } = await import('@/lib/db/schema');
+                    const { eq } = await import('drizzle-orm');
+
+                    const adminUser = await db.query.users.findFirst({
+                        where: eq(users.whopCompanyId, companyId)
+                    });
+
+                    if (adminUser) {
+                        await trackActivityEvent(companyId, courseMemberId, adminUser.id);
+                        console.log('[Webhook] Tracked course activity for:', courseMemberId);
+                    }
+                }
                 break;
+
             default:
-                console.log(`Unhandled webhook event: ${eventType}`);
+                console.log(`[Webhook] Unhandled event: ${eventType}`);
         }
 
         return NextResponse.json({ received: true });
     } catch (error) {
-        console.error('Webhook Error:', error);
+        console.error('[Webhook] Error:', error);
         return NextResponse.json({ error: 'Webhook handler failed' }, { status: 500 });
     }
 }
