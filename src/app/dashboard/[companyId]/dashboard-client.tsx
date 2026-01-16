@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { RevenueChart } from "@/components/dashboard/revenue-chart";
 import { InsightCard } from "@/components/dashboard/insight-card";
 import { CoachChat } from "@/components/dashboard/coach-chat";
+import { ForecastCard } from "@/components/dashboard/forecast-card";
 
 interface DashboardClientProps {
     companyId: string;
@@ -22,6 +23,7 @@ export default function DashboardClient({ companyId }: DashboardClientProps) {
     const [risk, setRisk] = useState<any>(null);
     const [history, setHistory] = useState<any>([]);
     const [insight, setInsight] = useState<string>("");
+    const [forecast, setForecast] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [syncing, setSyncing] = useState(false);
 
@@ -39,7 +41,8 @@ export default function DashboardClient({ companyId }: DashboardClientProps) {
                     fetch(`/api/analytics/revenue${queryParams}`),
                     fetch(`/api/analytics/risk${queryParams}`),
                     fetch(`/api/analytics/history${queryParams}`),
-                    fetch(`/api/analytics/insight${queryParams}`)
+                    fetch(`/api/analytics/insight${queryParams}`),
+                    fetch(`/api/analytics/forecast${queryParams}`)
                 ]);
 
                 // Debug: Check for failures
@@ -50,7 +53,7 @@ export default function DashboardClient({ companyId }: DashboardClientProps) {
                     }
                 }
 
-                const [engRes, revRes, riskRes, histRes, insightRes] = responses;
+                const [engRes, revRes, riskRes, histRes, insightRes, forecastRes] = responses;
 
                 if (engRes.ok) setMetrics(await engRes.json());
                 if (revRes.ok) setRevenue(await revRes.json());
@@ -62,6 +65,9 @@ export default function DashboardClient({ companyId }: DashboardClientProps) {
                 if (insightRes.ok) {
                     const iData = await insightRes.json();
                     setInsight(iData.insight || "");
+                }
+                if (forecastRes.ok) {
+                    setForecast(await forecastRes.json());
                 }
 
             } catch (e) {
@@ -155,6 +161,11 @@ export default function DashboardClient({ companyId }: DashboardClientProps) {
                     trend="Action Needed"
                     trendUp={false}
                 />
+            </div>
+
+            {/* Forecast Section */}
+            <div className="animate-in fade-in slide-in-from-bottom-10 duration-700 delay-150">
+                <ForecastCard data={forecast} loading={loading} />
             </div>
 
             {/* Charts Section */}
